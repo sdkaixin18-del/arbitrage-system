@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.stock-review-mac.autostart</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/env</string>
+    <string>-i</string>
+    <string>HOME=__USER_HOME__</string>
+    <string>PATH=/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <string>LANG=en_US.UTF-8</string>
+    <string>TMPDIR=/tmp</string>
+    <string>STOCK_REVIEW_RUNTIME_ROOT=__RUNTIME_ROOT__</string>
+    <string>STOCK_REVIEW_DATA_ROOT=__DATA_ROOT__</string>
+    <string>/usr/bin/python3</string>
+    <string>__LAUNCHER_ROOT__/supervisor.py</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__LAUNCHER_ROOT__</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/autostart.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/autostart.err.log</string>
+</dict>
+</plist>

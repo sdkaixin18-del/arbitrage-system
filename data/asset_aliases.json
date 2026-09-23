@@ -1,0 +1,228 @@
+{
+  "version": 1,
+  "updatedAt": "2026-08-17",
+  "exchanges": {
+    "bn": { "name": "Binance", "aliases": ["binance"] },
+    "by": { "name": "Bybit", "aliases": ["bybit"] },
+    "gt": { "name": "Gate", "aliases": ["gate", "gate.io"] },
+    "okx": { "name": "OKX", "aliases": ["okx"] },
+    "bg": { "name": "Bitget", "aliases": ["bitget"] },
+    "htx": { "name": "HTX", "aliases": ["huobi", "htx"] },
+    "as": { "name": "Aster", "aliases": ["aster"] },
+    "hl": { "name": "Hyperliquid", "aliases": ["hyperliquid"] },
+    "coinbase": { "name": "Coinbase", "aliases": ["cb", "coinbase"] },
+    "kraken": { "name": "Kraken", "aliases": ["kraken"] },
+    "kucoin": { "name": "KuCoin", "aliases": ["kucoin"] },
+    "upbit": { "name": "Upbit", "aliases": ["upbit"] },
+    "bithumb": { "name": "Bithumb", "aliases": ["bithumb"] }
+  },
+  "assets": [
+    {
+      "canonicalAssetId": "asset:nesa",
+      "canonicalSymbol": "NES",
+      "canonicalName": "Nesa",
+      "status": "verified",
+      "aliases": ["NES", "NESA"],
+      "networks": [
+        {
+          "network": "bsc",
+          "contractAddress": "0x3131f6B80C26936aB03F7d9D29Eb4Ddf36AC3FB5",
+          "status": "verified"
+        }
+      ],
+      "evidence": [
+        {
+          "type": "official_listing",
+          "source": "okx",
+          "value": "OKX lists Nesa with ticker NES and the BSC contract address."
+        },
+        {
+          "type": "index_components",
+          "source": "bybit",
+          "value": "Bybit NESAUSDT index components reference NES spot pairs across independent venues with multiplier 1."
+        }
+      ],
+      "exchangeMappings": [
+        {
+          "exchange": "by",
+          "marketType": "futures",
+          "symbol": "NESA",
+          "priceRatio": 1,
+          "status": "verified",
+          "evidence": "Bybit NESAUSDT tracks the NES spot index; normalize display and monitoring to NES."
+        }
+      ]
+    },
+    {
+      "canonicalAssetId": "asset:nex",
+      "canonicalSymbol": "NEX",
+      "canonicalName": "NEX",
+      "status": "verified",
+      "aliases": ["NEX"],
+      "evidence": [
+        {
+          "type": "local_mapping",
+          "source": "crypto_symbol_mappings",
+          "value": "NEX maps to Bitget spot 10000NEX with priceRatio 10000"
+        }
+      ],
+      "exchangeMappings": [
+        {
+          "exchange": "bg",
+          "marketType": "spot",
+          "symbol": "10000NEX",
+          "priceRatio": 10000,
+          "status": "verified",
+          "evidence": "Bitget spot uses 10000NEX execution symbol; normalize display and PnL back to NEX."
+        }
+      ]
+    },
+    {
+      "canonicalAssetId": "asset:rats",
+      "canonicalSymbol": "RATS",
+      "canonicalName": "RATS",
+      "status": "inferred",
+      "aliases": ["RATS"],
+      "evidence": [
+        {
+          "type": "face_value",
+          "source": "manual_rule",
+          "value": "1000RATS is treated as an execution alias when configured per exchange."
+        }
+      ],
+      "exchangeMappings": [
+        {
+          "exchange": "bg",
+          "marketType": "spot",
+          "symbol": "1000RATS",
+          "priceRatio": 1000,
+          "status": "inferred",
+          "evidence": "Example face-value mapping; verify before live use."
+        }
+      ]
+    },
+    {
+      "canonicalAssetId": "asset:eth",
+      "canonicalSymbol": "ETH",
+      "canonicalName": "Ethereum",
+      "status": "verified",
+      "aliases": ["ETH", "ETHEREUM"],
+      "networks": [
+        { "network": "ethereum", "contractAddress": null, "status": "verified" },
+        { "network": "arbitrum", "contractAddress": null, "status": "verified" },
+        { "network": "optimism", "contractAddress": null, "status": "verified" }
+      ],
+      "evidence": [
+        {
+          "type": "native_asset",
+          "source": "manual_rule",
+          "value": "Native ETH. Wrapped variants remain separate assets for transfer and borrow checks."
+        }
+      ],
+      "exchangeMappings": []
+    },
+    {
+      "canonicalAssetId": "asset:weth",
+      "canonicalSymbol": "WETH",
+      "canonicalName": "Wrapped Ether",
+      "status": "verified",
+      "aliases": ["WETH", "WRAPPEDETH"],
+      "wrappedOf": "asset:eth",
+      "networks": [
+        {
+          "network": "ethereum",
+          "contractAddress": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+          "status": "verified"
+        }
+      ],
+      "evidence": [
+        {
+          "type": "contract",
+          "source": "manual_rule",
+          "value": "Wrapped ETH has its own contract and must not be collapsed into native ETH for borrow/transfer checks."
+        }
+      ],
+      "exchangeMappings": []
+    },
+    {
+      "canonicalAssetId": "asset:usdt",
+      "canonicalSymbol": "USDT",
+      "canonicalName": "Tether USD",
+      "status": "verified",
+      "aliases": ["USDT", "TETHER"],
+      "networks": [
+        {
+          "network": "ethereum",
+          "contractAddress": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+          "status": "verified"
+        },
+        {
+          "network": "tron",
+          "contractAddress": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+          "status": "verified"
+        }
+      ],
+      "evidence": [
+        {
+          "type": "network_scope",
+          "source": "manual_rule",
+          "value": "USDT can be one price asset while transfer checks must retain network."
+        }
+      ],
+      "exchangeMappings": []
+    },
+    {
+      "canonicalAssetId": "asset:polygon-ecosystem-token",
+      "canonicalSymbol": "POL",
+      "canonicalName": "Polygon Ecosystem Token",
+      "status": "inferred",
+      "aliases": ["POL", "MATIC"],
+      "migrations": [
+        {
+          "fromSymbol": "MATIC",
+          "toSymbol": "POL",
+          "status": "inferred",
+          "evidence": "Manual migration example: old and new symbols can share a canonical asset only when a migration note is present."
+        }
+      ],
+      "evidence": [
+        {
+          "type": "migration",
+          "source": "manual_rule",
+          "value": "Rename/migration aliases must be evidence-backed; symbol similarity is not enough."
+        }
+      ],
+      "exchangeMappings": []
+    },
+    {
+      "canonicalAssetId": "asset:edge-network",
+      "canonicalSymbol": "EDGE",
+      "canonicalName": "Edge Network",
+      "status": "manual_review",
+      "aliases": ["EDGE"],
+      "evidence": [
+        {
+          "type": "symbol_collision",
+          "source": "manual_rule",
+          "value": "EDGE has known same-symbol collision risk across exchanges."
+        }
+      ],
+      "exchangeMappings": []
+    },
+    {
+      "canonicalAssetId": "asset:edge-layer",
+      "canonicalSymbol": "EDGE",
+      "canonicalName": "Edge Layer",
+      "status": "manual_review",
+      "aliases": ["EDGE"],
+      "evidence": [
+        {
+          "type": "symbol_collision",
+          "source": "manual_rule",
+          "value": "Do not merge same-symbol EDGE assets without strong exchange metadata."
+        }
+      ],
+      "exchangeMappings": []
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">自选股推送</title>
+  <desc id="desc">A watchlist stock push notification logo with a rising chart and star.</desc>
+  <rect width="512" height="512" rx="96" fill="#0f172a"/>
+  <path d="M106 342h300" stroke="#e5e7eb" stroke-width="20" stroke-linecap="round" opacity=".72"/>
+  <path d="M132 318l72-72 66 42 108-126" fill="none" stroke="#22c55e" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M377 103l16 42 45 2-35 28 12 44-38-24-38 24 12-44-35-28 45-2 16-42z" fill="#facc15"/>
+  <circle cx="132" cy="318" r="20" fill="#f43f5e"/>
+  <circle cx="204" cy="246" r="20" fill="#f43f5e"/>
+  <circle cx="270" cy="288" r="20" fill="#f43f5e"/>
+  <circle cx="378" cy="162" r="20" fill="#f43f5e"/>
+  <text x="256" y="420" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="72" font-weight="800" fill="#f8fafc">自选</text>
+</svg>

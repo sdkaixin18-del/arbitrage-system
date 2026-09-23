@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Exchange Announcements">
+  <defs>
+    <linearGradient id="bg" x1="72" y1="56" x2="440" y2="456" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#102A43"/>
+      <stop offset="0.52" stop-color="#146C94"/>
+      <stop offset="1" stop-color="#23A6A0"/>
+    </linearGradient>
+    <linearGradient id="coin" x1="156" y1="124" x2="382" y2="360" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFE08A"/>
+      <stop offset="1" stop-color="#F5A524"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <circle cx="256" cy="228" r="118" fill="url(#coin)"/>
+  <path d="M256 112a116 116 0 0 1 101 59c-30-20-67-31-107-31-38 0-73 10-102 28a116 116 0 0 1 108-56Z" fill="#FFF3C4" opacity=".85"/>
+  <path d="M178 226h156" stroke="#102A43" stroke-width="32" stroke-linecap="round"/>
+  <path d="M256 148v156" stroke="#102A43" stroke-width="32" stroke-linecap="round"/>
+  <path d="M136 356h240" stroke="#F8FAFC" stroke-width="34" stroke-linecap="round"/>
+  <path d="M148 410h216" stroke="#F8FAFC" stroke-width="28" stroke-linecap="round" opacity=".78"/>
+  <path d="M364 126l44-40 8 59 52 29-58 12-31 52-18-56-56-14 59-42Z" fill="#F8FAFC"/>
+</svg>

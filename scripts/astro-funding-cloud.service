@@ -1,0 +1,26 @@
+[Unit]
+Description=Astro Funding Formation Cloud
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/astro-funding-cloud/current/backend
+Environment=STOCK_REVIEW_DATA_DIR=/var/lib/astro-funding-cloud
+Environment=STOCK_REVIEW_REQUIRE_EXTERNAL_DRIVE=0
+Environment=FUNDING_FORMATION_CACHE_MAX_ITEMS=200
+Environment=FUNDING_PREDICTION_RETENTION_DAYS=180
+Environment=FUNDING_CLOUD_BATCH_WORKERS=2
+ExecStart=/opt/astro-funding-cloud/venv/bin/python -m uvicorn app.funding_cloud:app --host 127.0.0.1 --port 8766 --no-access-log
+Restart=always
+RestartSec=3
+Nice=10
+CPUQuota=50%
+MemoryMax=384M
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

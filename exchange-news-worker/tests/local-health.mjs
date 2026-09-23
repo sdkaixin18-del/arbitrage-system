@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import { localUnavailable, shouldRestartLocal } from '../local-health.mjs';
+const now = Date.now();
+const healthy = { runtime: { lastCycleAt: new Date(now).toISOString() }, sources: ['news', 'contracts'].map(kind => ({ kind, status: 'degraded', consecutiveFailures: 0, lastCheckedAt: new Date(now).toISOString() })) };
+assert.equal(localUnavailable(healthy, now), false);
+assert.equal(localUnavailable({ ...healthy, sources: healthy.sources.map(s => ({ ...s, status: 'error', consecutiveFailures: 411 })) }, now), true);
+assert.equal(localUnavailable({ ...healthy, sources: [] }, now), true);
+assert.equal(localUnavailable(healthy, now + 100_000), true);
+assert.equal(shouldRestartLocal({ failures: 3, startedAt: now - 130_000, lastRestartAt: 0, now }), true);
+assert.equal(shouldRestartLocal({ failures: 2, startedAt: now - 130_000, lastRestartAt: 0, now }), false);
+assert.equal(shouldRestartLocal({ failures: 3, startedAt: now - 30_000, lastRestartAt: 0, now }), false);
+assert.equal(shouldRestartLocal({ failures: 10, startedAt: now - 130_000, lastRestartAt: now - 300_000, now }), false);
+console.log('PASS: failed scans, stale data, partial information, startup grace, restart cooldown');

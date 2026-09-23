@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# Backend test runner
+pytest==8.3.5

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">套利系统</title>
+  <desc id="desc">深蓝背景上的双向套利箭头与行情信号。</desc>
+  <defs>
+    <linearGradient id="bg" x1="50" y1="0" x2="460" y2="512" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#153855"/>
+      <stop offset="1" stop-color="#07172D"/>
+    </linearGradient>
+    <linearGradient id="signal" x1="104" y1="170" x2="405" y2="255" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#14C5B4"/>
+      <stop offset="1" stop-color="#64F4CE"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <circle cx="256" cy="256" r="187" fill="none" stroke="#8AE5E6" stroke-opacity=".09" stroke-width="2"/>
+  <path d="M113 253v-29c0-45 36-81 81-81h172" fill="none" stroke="url(#signal)" stroke-width="42" stroke-linecap="round"/>
+  <path d="m328 96 49 47-49 47" fill="none" stroke="#62F1CF" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M399 259v29c0 45-36 81-81 81H146" fill="none" stroke="#EEF8FF" stroke-width="42" stroke-linecap="round"/>
+  <path d="m184 416-49-47 49-47" fill="none" stroke="#EEF8FF" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m256 215 10 30 31 11-31 11-10 30-10-30-31-11 31-11Z" fill="#62F1CF"/>
+</svg>

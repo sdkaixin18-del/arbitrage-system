@@ -1,0 +1,14 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+SQLAlchemy==2.0.36
+pydantic==2.10.4
+APScheduler==3.10.4
+pypinyin==0.53.0
+httpx==0.28.1
+requests>=2.32.0
+curl_cffi>=0.7.0
+python-multipart==0.0.20
+playwright==1.49.1
+akshare>=1.16.0
+pandas>=2.2.0
+browser-cookie3==0.20.1

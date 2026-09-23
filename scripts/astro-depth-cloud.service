@@ -1,0 +1,26 @@
+[Unit]
+Description=Astro read-only backup depth verifier
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/astro-depth-cloud/current/backend
+Environment=STOCK_REVIEW_DATA_DIR=/var/lib/astro-depth-cloud
+Environment=STOCK_REVIEW_REQUIRE_EXTERNAL_DRIVE=0
+Environment=ASTRO_DEPTH_CLOUD_ENABLED=0
+Environment=CRYPTO_API_TIMEOUT_SECONDS=3
+Environment=CRYPTO_HTTP_TIMEOUT=3
+ExecStart=/opt/astro-funding-cloud/venv/bin/python -m uvicorn app.astro_depth_cloud:app --host 127.0.0.1 --port 8767 --no-access-log
+Restart=always
+RestartSec=3
+Nice=5
+CPUQuota=70%
+MemoryMax=384M
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

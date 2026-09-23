@@ -1,0 +1,60 @@
+[
+  {
+    "exchange": "gate",
+    "payload": {
+      "currency": "NES",
+      "name": "NESA",
+      "withdraw_disabled": true,
+      "deposit_disabled": true,
+      "chain": "ETH",
+      "chains": [
+        {
+          "name": "ETH",
+          "withdraw_disabled": true,
+          "deposit_disabled": true
+        }
+      ]
+    }
+  },
+  {
+    "exchange": "bitget",
+    "payload": {
+      "code": "00000",
+      "msg": "success",
+      "data": [
+        {
+          "coin": "NES",
+          "chains": [
+            {
+              "chain": "ERC20",
+              "withdrawable": "false",
+              "rechargeable": "false"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "exchange": "okx",
+    "payload": {
+      "code": 0,
+      "data": [
+        {
+          "canDep": false,
+          "canWd": false,
+          "ccy": "NES",
+          "chain": "NES-BSC",
+          "name": "Nesa"
+        }
+      ]
+    }
+  },
+  {
+    "exchange": "bybit",
+    "payload": {
+      "code": 0,
+      "data": []
+    }
+  }
+]
