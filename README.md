@@ -1,6 +1,6 @@
 # Arbitrage System
 
-Private, sanitized source snapshot of the local arbitrage monitoring system.
+Public, sanitized source snapshot of the local arbitrage monitoring system.
 
 ## Scope
 
@@ -26,9 +26,9 @@ The environment example lists keys without real configuration values.
 
 This is a code backup, not a production data backup or ready-to-run deployment.
 Do not point a test checkout at production storage or enable trading credentials.
-Private visibility is an additional access restriction, not a substitute for
-secret scanning. Keep this repository private; review every future diff before
-uploading. No automated deployment workflow is included.
+Public visibility means every commit and future upload can be read by anyone.
+Review every future diff for secrets and personal data before uploading. No
+automated deployment workflow is included.
 
 ## Development
 
