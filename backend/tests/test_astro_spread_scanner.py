@@ -1832,6 +1832,7 @@ def test_okxdex_executable_preflight_uses_card_amount_and_same_quantity_futures_
     monkeypatch.setattr(scanner_module, "astro_max_notional_usdt", lambda _config: 20.0)
 
     class FakeResponse:
+        status_code = 200
         def raise_for_status(self) -> None:
             return None
 

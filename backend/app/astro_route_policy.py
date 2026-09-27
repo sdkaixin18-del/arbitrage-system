@@ -13,7 +13,7 @@ import threading
 import time
 
 
-LABELS = {"capacity": "复核繁忙", "quote_quality": "盘口质量不达标", "transport": "通道连接异常"}
+LABELS = {"capacity": "复核繁忙", "quote_quality": "盘口质量不达标", "transport": "通道连接异常", "configuration": "链上询价配置错误", "no_route": "链上无可用报价路线"}
 
 
 def route_key(pair):
@@ -22,6 +22,12 @@ def route_key(pair):
 
 def category(report):
     reason, error = str(report.get("reason") or ""), str(report.get("error") or "").lower()
+    if 'dex[configuration]' in error:
+        return 'configuration'
+    if 'dex[no_route]' in error:
+        return 'no_route'
+    if 'dex[rate_limit]' in error or 'dex[capacity]' in error:
+        return 'capacity'
     if any(s in error for s in ("深度不足", "insufficient depth", "depth not sufficient")):
         return None
     if reason in {"cloud_depth_busy", "cloud_queue_expired", "local_queue_timeout"} or any(s in error for s in ("429", "并发", "排队", "rate limit")):

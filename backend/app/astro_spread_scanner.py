@@ -5130,9 +5130,17 @@ def _fetch_okxdex_executable_preflight(
             "contractAddress": contract_address,
             "amountUsdt": quote_notional,
             "exchange": dex_config.get("exchange", "okxdex"),
+            "fresh": "true" if dex_config.get("_freshDexQuote") else "false",
         },
         timeout=spread_okxdex_quote_timeout_seconds(),
     )
+    if response.status_code >= 400:
+        try:
+            detail = response.json().get('detail')
+        except (ValueError, AttributeError):
+            detail = None
+        if isinstance(detail, dict) and detail.get('category'):
+            raise RuntimeError(f"DEX[{detail['category']}] {detail.get('message', '询价失败')}；重试等待 {detail.get('retryAfterSeconds', 0)} 秒")
     response.raise_for_status()
     quote = response.json()
     if not isinstance(quote, dict):
@@ -5496,7 +5504,7 @@ def _fetch_direct_route_once_local(
                 okxdex_preflight = _fetch_okxdex_executable_preflight(
                     execution_client,
                     symbol,
-                    dex_config,
+                    {**dex_config, "_freshDexQuote": bool(pair.get("_freshDexQuote"))},
                     sell_exchange,
                     aliases,
                     config,
@@ -5875,7 +5883,7 @@ def _revalidate_dex_three_quotes(pair, config):
     for index in range(3):
         if index:
             time.sleep(1.0)
-        latest_pair, report = _fetch_direct_route_once(pair, config)
+        latest_pair, report = _fetch_direct_route_once({**pair, "_freshDexQuote": True}, config)
         report = dict(report)
         if latest_pair is not None:
             execution = report.get("okxdexExecutablePreflight")

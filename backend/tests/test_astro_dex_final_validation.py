@@ -20,6 +20,7 @@ def test_dex_three_fresh_quotes(monkeypatch, exchange, source, estimated, entry,
             "_hotDirectHit": {"verifiedAtMs": 100000, "report": {"reason": "eligible", "latestOpenSpreadPct": 9}}}
     calls = []
     def fetch(*args, **kwargs):
+        assert args[0]["_freshDexQuote"] is True
         calls.append(clock[0])
         index = len(calls)
         timestamp = clock[0] * 1000

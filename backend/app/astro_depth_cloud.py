@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from concurrent.futures import Future, TimeoutError as FutureTimeout
 from contextlib import asynccontextmanager
 import base64
 from datetime import datetime, timezone
@@ -41,6 +42,98 @@ _last_request: dict[str, float] = {}
 _client = httpx.Client(timeout=httpx.Timeout(3.0, connect=1.5), trust_env=False, follow_redirects=False)
 _dex_lock = threading.Lock()
 _last_dex_request = 0.0
+_dex_state_lock = threading.Lock()
+_dex_inflight = {}
+_dex_cooldowns = {}
+_dex_slots = threading.BoundedSemaphore(3)
+_dex_venue_locks = defaultdict(threading.Lock)
+_dex_last_started = {}
+_dex_context = threading.local()
+_dex_metrics = defaultdict(int)
+
+
+def _dex_error(kind, message, *, status=502, retry=0):
+    return HTTPException(status, {"category": kind, "message": message,
+                                  "retryAfterSeconds": retry},
+                         headers={"Retry-After": str(retry)} if retry else None)
+
+
+def _scheduled_dex_quote(exchange, chain, address, amount, fresh, fetch):
+    # Only concurrent discovery calls coalesce. No completed quote cache exists.
+    key = (exchange, chain, address, amount)
+    deadline = time.monotonic() + 8.0
+    owner = True
+    with _dex_state_lock:
+        now = time.monotonic()
+        for old in list(_dex_cooldowns):
+            if _dex_cooldowns[old][0] <= now:
+                del _dex_cooldowns[old]
+        for scope in [(exchange,), (exchange, chain), key]:
+            if scope in _dex_cooldowns:
+                until, error = _dex_cooldowns[scope]
+                _dex_metrics['cooldownRejected'] += 1
+                raise _dex_error(error.detail['category'], error.detail['message'],
+                                 status=error.status_code, retry=max(1, math.ceil(until-now)))
+        future = None if fresh else _dex_inflight.get(key)
+        if future is not None:
+            owner = False
+            _dex_metrics['joinedInflight'] += 1
+        else:
+            if not _dex_slots.acquire(blocking=False):
+                _dex_metrics['queueRejected'] += 1
+                raise _dex_error('capacity', 'DEX 询价队列已满', status=429, retry=2)
+            future = Future()
+            if not fresh:
+                _dex_inflight[key] = future
+    if not owner:
+        try:
+            return {**future.result(timeout=max(.01, deadline-time.monotonic())), 'joinedInflight': True}
+        except FutureTimeout:
+            raise _dex_error('timeout', 'DEX 合并询价等待超时', status=504)
+    venue_lock = _dex_venue_locks[exchange]
+    acquired = False
+    try:
+        acquired = venue_lock.acquire(timeout=2.0)
+        if not acquired:
+            raise _dex_error('capacity', 'DEX 询价排队超时', status=429, retry=2)
+        # Recheck cooldown after queueing: a preceding request may have failed.
+        with _dex_state_lock:
+            for scope in [(exchange,), (exchange, chain), key]:
+                entry = _dex_cooldowns.get(scope)
+                if entry and entry[0] > time.monotonic():
+                    raise entry[1]
+        wait = max(0.0, 1.1-(time.monotonic()-_dex_last_started.get(exchange, 0)))
+        if wait:
+            time.sleep(wait)
+        _dex_last_started[exchange] = time.monotonic()
+        _dex_context.deadline = deadline
+        result = fetch()
+        with _dex_state_lock:
+            _dex_metrics['success'] += 1
+        future.set_result(result)
+        return result
+    except Exception as exc:
+        with _dex_state_lock:
+            _dex_metrics['errors'] += 1
+            if isinstance(exc, HTTPException) and isinstance(exc.detail, dict):
+                kind = exc.detail.get('category')
+                retry = int(exc.detail.get('retryAfterSeconds') or 0)
+                scope = (exchange,) if kind == 'rate_limit' else (exchange, chain) if kind == 'configuration' else key
+                if retry:
+                    if len(_dex_cooldowns) >= 1000:
+                        _dex_cooldowns.pop(next(iter(_dex_cooldowns)))
+                    _dex_cooldowns[scope] = (time.monotonic()+retry, exc)
+        future.set_exception(exc)
+        raise
+    finally:
+        _dex_context.deadline = None
+        if acquired:
+            venue_lock.release()
+        with _dex_state_lock:
+            if _dex_inflight.get(key) is future:
+                del _dex_inflight[key]
+        _dex_slots.release()
+
 _dex_config_lock = threading.Lock()
 _dex_config_cache: tuple[float, list[dict[str, Any]]] | None = None
 
@@ -124,6 +217,7 @@ def health():
         "maxConcurrency": 6,
         "dexQuote": {
             "okxdex": OKX_CREDENTIAL_FILE.is_file(),
+            "credentialCheckOnly": True, "metrics": dict(_dex_metrics),
             "pancakeswapv3": True,
         },
     }
@@ -202,9 +296,9 @@ def _okx_quote(symbol: str, chain_index: str, contract_address: str, amount_usdt
     quote = quote_tokens.get(chain_index)
     if not quote:
         if chain_index == "501":
-            quote = {"quote": "Es9vMFrzaCERmJfrF4H2FYDkC6WQ5GQ7gGzQfX3b1qB", "quoteDecimals": 6}
+            quote = {"quote": "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", "quoteDecimals": 6}
         else:
-            raise HTTPException(422, "USDT quote token is not configured for this chain")
+            raise _dex_error('configuration', '付款币尚未配置，请核对链和地址', status=422, retry=60)
     params = {
         "chainIndex": chain_index,
         "amount": _quote_amount_raw(amount_usdt, int(quote["quoteDecimals"])),
@@ -223,18 +317,37 @@ def _okx_quote(symbol: str, chain_index: str, contract_address: str, amount_usdt
         "OK-ACCESS-PASSPHRASE": credentials["P"],
         "OK-ACCESS-TIMESTAMP": timestamp,
     }
-    try:
-        response = _client.get(f"https://web3.okx.com{request_path}", headers=headers, timeout=6.0)
-        payload = response.json()
-    except (httpx.TransportError, ValueError) as exc:
-        raise HTTPException(502, "OKX DEX quote transport unavailable") from exc
+    deadline = getattr(_dex_context, 'deadline', None) or (time.monotonic()+6.0)
+    for attempt in range(2):
+        try:
+            remaining = deadline-time.monotonic()
+            if remaining <= 0:
+                raise _dex_error('timeout', 'OKX DEX 询价总时限耗尽', status=504)
+            response = _client.get(f"https://web3.okx.com{request_path}", headers=headers, timeout=min(6.0, remaining))
+            payload = response.json()
+            break
+        except httpx.TransportError as exc:
+            if attempt == 0 and deadline-time.monotonic() >= 1.5:
+                continue
+            raise _dex_error('timeout' if isinstance(exc, httpx.TimeoutException) else 'transport',
+                             'OKX DEX 网络询价失败: '+type(exc).__name__, status=504 if isinstance(exc, httpx.TimeoutException) else 502) from exc
+        except ValueError as exc:
+            raise _dex_error('upstream', 'OKX DEX 返回格式异常') from exc
     if response.status_code != 200 or not isinstance(payload, dict) or str(payload.get("code")) != "0":
         message = str(payload.get("msg") or f"HTTP {response.status_code}") if isinstance(payload, dict) else f"HTTP {response.status_code}"
-        raise HTTPException(502, f"OKX DEX quote rejected: {message[:160]}")
+        code = str(payload.get('code', '')) if isinstance(payload, dict) else ''
+        lower = message.lower()
+        if response.status_code == 429 or code == '50011' or 'rate limit' in lower or 'too many' in lower:
+            raise _dex_error('rate_limit', 'OKX DEX 请求限流', status=429, retry=10)
+        if str(quote['quote']).lower() in lower and ('not supported' in lower or 'invalid' in lower):
+            raise _dex_error('configuration', 'OKX DEX 付款币配置错误，请核对链和地址', status=422, retry=60)
+        if any(word in lower for word in ('not supported', 'liquidity', 'route', 'token address')):
+            raise _dex_error('no_route', 'OKX DEX 当前代币无可用询价路线', status=422, retry=30)
+        raise _dex_error('upstream', 'OKX DEX 拒绝询价，错误码 '+code[:40])
     rows = payload.get("data")
     raw = rows[0] if isinstance(rows, list) and rows and isinstance(rows[0], dict) else None
     if not raw:
-        raise HTTPException(502, "OKX DEX returned no executable route")
+        raise _dex_error('no_route', 'OKX DEX 当前代币无可用询价路线', status=422, retry=30)
     from_token = raw.get("fromToken") if isinstance(raw.get("fromToken"), dict) else {}
     to_token = raw.get("toToken") if isinstance(raw.get("toToken"), dict) else {}
     from_decimals = int(from_token.get("decimal") or quote["quoteDecimals"])
@@ -366,7 +479,7 @@ def dex_coins():
 
 @app.get("/dex-quote")
 @app.get("/v1/dex-quote")
-def dex_quote(symbol: str, chainIndex: str, contractAddress: str, amountUsdt: float, exchange: str = "okxdex"):
+def dex_quote(symbol: str, chainIndex: str, contractAddress: str, amountUsdt: float, exchange: str = "okxdex", fresh: bool = False):
     normalized_symbol = symbol.strip().upper()
     normalized_exchange = exchange.strip().lower()
     normalized_chain = chainIndex.strip()
@@ -385,17 +498,14 @@ def dex_quote(symbol: str, chainIndex: str, contractAddress: str, amountUsdt: fl
             raise HTTPException(400, "Invalid Solana token address")
     elif not EVM_ADDRESS.fullmatch(normalized_contract):
         raise HTTPException(400, "Invalid EVM token address")
-    global _last_dex_request
-    with _dex_lock:
-        wait = max(0.0, 1.1 - (time.monotonic() - _last_dex_request))
-        if wait:
-            time.sleep(wait)
-        _last_dex_request = time.monotonic()
-        if normalized_exchange == "okxdex":
-            return _okx_quote(normalized_symbol, normalized_chain, normalized_contract, amountUsdt)
-        if normalized_exchange == "pancakeswapv3":
-            return _pancake_quote(normalized_symbol, normalized_chain, normalized_contract, amountUsdt)
+    if normalized_exchange not in {'okxdex', 'pancakeswapv3'}:
         raise HTTPException(400, "Unsupported DEX quote venue")
+    def fetch():
+        if normalized_exchange == 'okxdex':
+            return _okx_quote(normalized_symbol, normalized_chain, normalized_contract, amountUsdt)
+        return _pancake_quote(normalized_symbol, normalized_chain, normalized_contract, amountUsdt)
+    return _scheduled_dex_quote(normalized_exchange, normalized_chain, normalized_contract,
+                                amountUsdt, fresh, fetch)
 
 
 @app.post("/v1/public-get")
