@@ -13,6 +13,9 @@ from test_astro_spread_scanner import sdk_config
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch, tmp_path):
     monkeypatch.setenv("STOCK_REVIEW_DATA_DIR", str(tmp_path))
+    (tmp_path / "settings.json").write_text('{}')
+    monkeypatch.setenv("ASTRO_SPREAD_SUBSCRIPTIONS_FILE", str(tmp_path / "settings.json"))
+    monkeypatch.setenv("ASTRO_CHAIN_LABEL_PUBLISH_ENABLED", "0")
     monkeypatch.setattr(scanner, "_hot_routes", {})
     monkeypatch.setattr(scanner, "_hot_recent_hits", {})
     monkeypatch.setattr(scanner, "_hot_recent_hit_at_ms", {})
@@ -31,6 +34,23 @@ def test_removed_funding_endpoints_and_scanner_readers():
     assert not hasattr(astro_depth_transport, "funding_snapshot")
     paths = {route.path for route in astro_depth_cloud.app.routes}
     assert {"/health", "/v1/public-get", "/dex-quote", "/v1/dex-quote", "/dex-coins"} == paths
+
+
+@pytest.mark.parametrize('discovery_interval', [5, 8])
+@pytest.mark.parametrize('listing_probe,expected', [(False, 0.5), (True, 5.0)])
+def test_discovery_interval_does_not_change_hot_or_listing_cadence(monkeypatch, discovery_interval, listing_probe, expected):
+    monkeypatch.setenv('ASTRO_SPREAD_SCAN_SECONDS', str(discovery_interval))
+    assert scanner.spread_scan_interval_seconds() == discovery_interval
+    identity = ('ABC', 'FF', 'gate', 'binance', '', '')
+    item = {'identity': identity, 'listingProbe': listing_probe}
+    scanner._hot_routes[identity] = item
+    scanner._stop.set()
+    try:
+        scanner._hot_route_direct_check(item, None)
+        assert item['nextPollMonotonic'] - item['lastDirectCheckStartedMonotonic'] == pytest.approx(expected)
+        assert scanner._hot_route_wait_snapshot()['listingProbeIntervalSeconds'] == 5.0
+    finally:
+        scanner._stop.clear()
 
 
 def test_distant_price_misses_back_off_but_near_threshold_recovers():

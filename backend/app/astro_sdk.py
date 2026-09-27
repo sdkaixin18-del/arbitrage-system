@@ -12,6 +12,7 @@ import subprocess
 import threading
 import time
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -35,6 +36,7 @@ from app.astro_card_registry import (
     astro_cleanup_status,
     mark_auto_card_system_deleted,
     observe_auto_card_cleanup,
+    record_cleanup_protection,
     pair_identity,
     pair_lifecycle_identity,
     register_auto_created_pair,
@@ -87,6 +89,10 @@ class AstroSdkError(RuntimeError):
 class AstroSdkNotExecuted(AstroSdkError):
     """Documented pre-action refusal, distinct from an ambiguous server error."""
     pass
+
+
+class AstroSdkBeforeSendExpired(AstroSdkNotExecuted, TimeoutError):
+    """Local deadline expired before starting HTTP; no remote request was sent."""
 
 
 class AstroSdkRateDeferred(AstroSdkNotExecuted):
@@ -233,41 +239,20 @@ def _publish_astro_chain_label(pair: dict[str, Any], astro_pair: dict[str, Any])
 def _queue_astro_chain_label_publish(pair: dict[str, Any], astro_pair: dict[str, Any] | None) -> None:
     if not isinstance(astro_pair, dict) or not astro_chain_label_publish_enabled() or pair.get('buyEx') == 'pancakeswapv3':
         return
-    def publish():
-        from app.astro_transfer_labels import collect
-        prepared = dict(pair)
-        try:
-            transfer_note, evidence = collect(pair)
-            prepared['_chainNote'] = '；'.join(filter(None, [str(pair.get('_chainNote') or ''), transfer_note]))
-            _log('astro_transfer_label_checked', message=f"Astro 充提备注已检查：{pair.get('name')}",
-                 details={'symbol':pair.get('name'),'cardId':astro_pair.get('id'),
-                          'transferNote':transfer_note,'checks':evidence,'blocksCreation':False})
-        except Exception as exc:
-            _log('astro_transfer_label_failed', level='warning', message='充提备注查询失败，卡片已正常创建',
-                 details={'symbol':pair.get('name'),'errorType':type(exc).__name__})
-        if prepared.get('_chainNote'):
-            from app.astro_label_queue import enqueue
-            enqueue(prepared, astro_pair)
-    threading.Thread(
-        target=publish,
-        name=f"astro-chain-label-{astro_pair.get('id')}",
-        daemon=True,
-    ).start()
+    # Persist before any optional lookup, then use the single bounded retry worker.
+    try:
+        if str(pair.get('type')).upper() in {'SF', 'FF'}:
+            astro_label_queue.enqueue_lookup(pair, astro_pair)
+        elif pair.get('_chainNote'):
+            astro_label_queue.enqueue(pair, astro_pair)
+    except Exception as exc:
+        _log('astro_transfer_label_enqueue_failed', level='error', message='卡片已创建，但备注补查任务保存失败',
+             details={'symbol': pair.get('name'), 'cardId': astro_pair.get('id'), 'errorType': type(exc).__name__})
 
 
 def _saved_auto_card_settings() -> dict[str, Any]:
-    explicit = os.environ.get("ASTRO_SPREAD_SUBSCRIPTIONS_FILE", "").strip()
-    data_dir = os.environ.get("STOCK_REVIEW_DATA_DIR", "").strip()
-    path = Path(explicit).expanduser() if explicit else (
-        Path(data_dir).expanduser() / "astro-spread-subscriptions.json" if data_dir else None
-    )
-    if path is None or not path.exists():
-        return {}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    from app.astro_settings import read_settings
+    return read_settings()
 
 
 def astro_fs_borrow_auto_card_enabled() -> bool:
@@ -514,12 +499,14 @@ class AstroSdkClient:
             raise AstroSdkError("Astro SDK 配置不完整")
         self.config = config
         self.deadline_support = True
+        self.connection_failed = False
         self._deadline_loop: asyncio.AbstractEventLoop | None = None
         self._deadline_client: httpx.AsyncClient | None = None
         self._transport = transport
         self._budget = budget_for(config.base_url)
         self.client = httpx.Client(
             timeout=config.timeout_seconds,
+            limits=httpx.Limits(max_connections=4, max_keepalive_connections=2, keepalive_expiry=30.0),
             verify=config.tls_verify,
             transport=transport,
             # Astro is addressed by its public gateway directly.  Keeping the
@@ -549,17 +536,18 @@ class AstroSdkClient:
     async def _post_until(self, url: str, *, content: bytes, headers: dict[str, str], deadline: float) -> httpx.Response:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise TimeoutError("Astro SDK request deadline exhausted")
+            raise AstroSdkBeforeSendExpired("Astro SDK request deadline exhausted before HTTP send")
         if self._deadline_client is None:
             self._deadline_client = httpx.AsyncClient(
                 verify=self.config.tls_verify,
+                limits=httpx.Limits(max_connections=4, max_keepalive_connections=2, keepalive_expiry=30.0),
                 transport=self._transport,
                 trust_env=False,
                 headers={"User-Agent": "stock-review-mac/astro-sdk"},
             )
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise TimeoutError("Astro SDK request deadline exhausted")
+            raise AstroSdkBeforeSendExpired("Astro SDK request deadline exhausted before HTTP send")
         # wait_for bounds the complete network operation, including DNS,
         # connection, upload and body reads. Cancellation leaves no background
         # write thread; an add timeout is still an uncertain remote outcome.
@@ -587,9 +575,14 @@ class AstroSdkClient:
             return result
         except Exception as exc:
             self._io_timing["errorType"] = type(exc).__name__
+            if isinstance(exc, (TimeoutError, httpx.TransportError)):
+                self.connection_failed = True
             raise
         finally:
             self._io_timing["durationMs"] = round((time.monotonic() - started) * 1000, 1)
+            if not self._io_timing["success"]:
+                self._io_timing.setdefault("failedPhase", self._io_timing.get("lastPhase", "unknown"))
+            self._io_timing["connectionReused"] = bool(self._io_timing.get("phasesMs")) and "connection.connect_tcp" not in self._io_timing.get("phasesMs", {})
             if payload.get("action") == "list":
                 record_io("sdkList", self._io_timing)
 
@@ -628,7 +621,7 @@ class AstroSdkClient:
                 response = self.client.post(self.config.base_url + resolved_path, content=raw_body.encode("utf-8"), headers=headers)
             else:
                 if deadline <= time.monotonic():
-                    raise TimeoutError("Astro SDK request deadline exhausted")
+                    raise AstroSdkBeforeSendExpired("Astro SDK request deadline exhausted before HTTP send")
                 if self._deadline_loop is None:
                     self._deadline_loop = asyncio.new_event_loop()
                 response = self._deadline_loop.run_until_complete(self._post_until(self.config.base_url + resolved_path, content=raw_body.encode("utf-8"), headers=headers, deadline=deadline))
@@ -980,12 +973,17 @@ def astro_ff_bybit_sell_exception_enabled() -> bool:
     return _saved_auto_card_settings().get("ffBybitSellExceptionEnabled") is True
 
 
+def astro_ff_bybit_sell_exception_min_open_pct() -> float:
+    value = _finite_number(_saved_auto_card_settings().get("ffBybitSellExceptionMinOpenSpreadPct", 10.0))
+    return value if value is not None and 0.01 <= value <= 100 else 10.0
+
+
 def astro_ff_bybit_sell_exception(candidate: dict[str, Any]) -> bool:
     opening = _finite_number(candidate.get("openSpreadPct"))
     return (candidate.get("type") == "FF"
             and candidate.get("sellExchange") == "bybit"
             and candidate.get("buyExchange") in ASTRO_FF_BUY_EXCHANGES - {"bybit"}
-            and opening is not None and opening > 10.0
+            and opening is not None and opening > astro_ff_bybit_sell_exception_min_open_pct()
             and astro_ff_bybit_sell_exception_enabled())
 
 
@@ -1067,6 +1065,45 @@ def _log(event: str, *, level: str = "info", message: str, details: dict[str, An
         duration_ms=safe_details.get("durationMs"),
         details=safe_details,
     )
+
+
+_sdk_idle_lock = threading.Lock()
+_sdk_idle_clients = deque()
+_sdk_client_type = AstroSdkClient
+
+
+@contextmanager
+def _reusable_sdk_client(config):
+    # A lease owns the client AND its event loop exclusively. A later sync
+    # thread may run that same stopped loop; loops are never run concurrently.
+    if AstroSdkClient is not _sdk_client_type:
+        with AstroSdkClient(config) as client:
+            yield client
+        return
+    client = None
+    expired = []
+    with _sdk_idle_lock:
+        while _sdk_idle_clients:
+            saved_at, saved = _sdk_idle_clients.pop()
+            if client is None and saved.config == config and time.monotonic() - saved_at < 30:
+                client = saved
+            else:
+                expired.append(saved)
+    for saved in expired:
+        saved.close()
+    if client is None:
+        client = AstroSdkClient(config)
+    reusable = False
+    try:
+        yield client
+        reusable = not client.connection_failed
+    finally:
+        with _sdk_idle_lock:
+            if reusable and len(_sdk_idle_clients) < 2:
+                _sdk_idle_clients.append((time.monotonic(), client))
+                client = None
+        if client is not None:
+            client.close()
 
 
 def _sdk_list_pairs(client: AstroSdkClient, deadline: float) -> list[dict[str, Any]]:
@@ -1181,7 +1218,7 @@ def _submission_confirmation_tick(config: AstroSdkConfig) -> None:
     if not due:
         return
     try:
-        with AstroSdkClient(config) as client:
+        with _reusable_sdk_client(config) as client:
             pairs = _list_pairs_with_retry(client, attempts=1, deadline=time.monotonic() + 6.0)
         _replace_existing_route_snapshot(pairs)
     except Exception as exc:
@@ -1349,6 +1386,8 @@ _CLEANUP_REQUIRED_CONFIG_FIELDS = frozenset({
 
 
 def _same_config_value(field: str, expected: Any, actual: Any) -> bool:
+    if field == "priceAlert" and expected in (None, "") and actual in (None, ""):
+        return True
     if isinstance(expected, bool) or isinstance(actual, bool):
         return isinstance(expected, bool) and isinstance(actual, bool) and actual is expected
     if isinstance(expected, (dict, list)) or isinstance(actual, (dict, list)):
@@ -1516,6 +1555,7 @@ def _process_cleanup_item(
     safe, safety_reason = _cleanup_safety_check(record, card)
     if not safe:
         reset_auto_card_invalid_observation(route)
+        record_cleanup_protection(card, safety_reason)
         _log(
             "astro_card_cleanup_blocked",
             level="info" if safety_reason == "card_not_paused" else "warning",
@@ -1582,6 +1622,7 @@ def _process_cleanup_item(
         details["error"] = str(exc)
     if not fresh_safe:
         reset_auto_card_invalid_observation(route)
+        record_cleanup_protection(card, fresh_reason)
         _log("astro_card_cleanup_blocked", message=f"Astro 删除前状态复核已保护卡片：{route[0]}", details={**details, "reason": fresh_reason, "cardId": str(card["id"])})
         return None
     if _creation_sync_pending():
@@ -1638,7 +1679,10 @@ def _sync_candidate_pair(
     revalidator: PairRevalidator | None,
     existing_routes: set[tuple[str, str, str, str]],
     submit_guard: PairSubmitGuard | None = None,
+    error_context: dict[str, Any] | None = None,
 ) -> bool:
+    error_context = error_context if error_context is not None else {}
+    error_context.update(stage="prepare_candidate", submissionState="not_submitted")
     symbol = str(original_pair.get("name") or "").strip().upper()
     route = _pair_identity(original_pair)
     initial_open_position = original_pair.get("openPosition")
@@ -1650,9 +1694,11 @@ def _sync_candidate_pair(
         pipeline["routeQueueWaitMs"] = max(0, round(route_started_ms - enqueued_at, 1))
 
     def guard_allows(candidate: dict[str, Any], stage: str) -> bool:
-        if submit_guard is None:
-            return True
         try:
+            from app.astro_settings import read_settings
+            read_settings(strict=True)
+            if submit_guard is None:
+                return True
             allowed, guard_report = submit_guard(candidate)
         except Exception as exc:
             allowed = False
@@ -1686,6 +1732,7 @@ def _sync_candidate_pair(
         except Exception:
             pass  # Transfer status is a remark, never a creation/opening gate.
 
+    error_context["stage"] = "prepare_dex_route"
     dex_ready, dex_details = _prepare_dex_route(client, original_pair, config)
     if not dex_ready:
         _log(
@@ -1706,10 +1753,12 @@ def _sync_candidate_pair(
         return False
 
     prepare = getattr(client, "prepare_creation", None)
+    error_context["stage"] = "prepare_creation"
     if callable(prepare) and not config.dry_run:
         pipeline["sdkPacingWaitMs"] = round(prepare(listing=isinstance(original_pair.get("_announcementCard"), dict)), 1)
 
     started_at_ms = int(time.time() * 1000)
+    error_context["stage"] = "revalidate_candidate"
     if revalidator is None:
         pair, revalidation, error = original_pair, None, ""
     else:
@@ -1784,6 +1833,7 @@ def _sync_candidate_pair(
             return False
         lifetime = min(leg["maxAgeSeconds"] - leg["ageSeconds"] for leg in freshness["legs"].values())
         submit_deadline = min(submit_deadline, time.monotonic() + max(0.0, lifetime))
+    error_context["stage"] = "read_before_submit"
     try:
         submit_existing = _sdk_list_pairs(client, submit_deadline)
     except (TimeoutError, httpx.TimeoutException) as exc:
@@ -1830,9 +1880,11 @@ def _sync_candidate_pair(
                 _log("astro_card_submit_quote_expired", message=f"Astro 提交前行情证据失效，等待重新复核：{symbol}", details={**safe_details, "reason": freshness["reason"], "submitAttempt": attempt})
                 return False
         _record_pending_submission(pair, "submitting")
+        error_context["submissionState"] = "outcome_unknown"
         return True
 
     submit_started_at_ms = int(time.time() * 1000)
+    error_context["stage"] = "submit_card"
     try:
         add_attempts = _add_pair_with_core_retry(client, pair, before_attempt=before_add_attempt, deadline=submit_deadline)
     except Exception as exc:
@@ -1840,6 +1892,7 @@ def _sync_candidate_pair(
         # route blocker instead of treating a missing acknowledgement as a
         # failed write and replaying it on the next scan.
         if isinstance(exc, (AstroSdkNotExecuted, httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)):
+            error_context["submissionState"] = "not_executed"
             mark_submission_not_executed(pair, f"明确未执行：{type(exc).__name__}: {exc}")
             _clear_pending_submission(pair)
             _log("astro_card_submission_not_executed", level="warning", message=f"Astro 请求未执行，结束本次提交：{symbol}",
@@ -1854,6 +1907,7 @@ def _sync_candidate_pair(
         _clear_pending_submission(pair)
         return False
     _record_pending_submission(pair, "awaiting_confirmation")
+    error_context.update(stage="confirm_submission", submissionState="awaiting_confirmation")
     submitted_at_ms = int(time.time() * 1000)
     pipeline.update({
         "astroSubmitStartedAtMs": submit_started_at_ms,
@@ -1886,6 +1940,7 @@ def _sync_candidate_pair(
     safe_details["pipeline"] = pipeline
     _log("astro_card_created", message=f"Astro 新卡片已确认：{symbol}（已暂停）", details=safe_details)
     verified_pair = next((item for item in verified_pairs if _pair_identity(item) == route), None)
+    error_context.update(stage="register_confirmed_card", submissionState="confirmed")
     register_auto_created_pair(pair, astro_pair=verified_pair)
     _clear_pending_submission(pair)
     _queue_astro_chain_label_publish(pair, verified_pair)
@@ -1915,7 +1970,7 @@ def _sync_pair_worker(
             pipeline["workerStartedAtMs"] = worker_started_at_ms
             pipeline["queueWaitMs"] = max(0, worker_started_at_ms - pipeline["queuedAtMs"])
             pair["_pipeline"] = pipeline
-        with AstroSdkClient(config) as client:
+        with _reusable_sdk_client(config) as client:
             stage = "list_pairs"
             existing = _list_pairs_with_retry(client)
             stage = "reconcile_routes"
@@ -2021,6 +2076,7 @@ def _sync_pair_worker(
                 route = _pair_identity(original_pair)
                 if route in existing_routes:
                     continue
+                error_context: dict[str, Any] = {"stage": "prepare_candidate", "submissionState": "not_submitted"}
                 try:
                     if _sync_candidate_pair(
                         client,
@@ -2029,6 +2085,7 @@ def _sync_pair_worker(
                         revalidator,
                         existing_routes,
                         submit_guard,
+                        error_context,
                     ):
                         created += 1
                 except AstroSdkRateDeferred:
@@ -2038,8 +2095,9 @@ def _sync_pair_worker(
                     _log(
                         "astro_card_sync_item_failed",
                         level="error",
-                        message=f"Astro 单卡建立失败，已继续处理其他路线：{route[0]}",
-                        details={"symbol": route[0], "type": route[1], "buyEx": route[2], "sellEx": route[3], "error": str(exc)},
+                        message=f"Astro 单卡流程异常，提交结果以核对状态为准：{route[0]}",
+                        details={"symbol": route[0], "type": route[1], "buyEx": route[2], "sellEx": route[3],
+                                 "error": str(exc).strip() or type(exc).__name__, "errorType": type(exc).__name__, **error_context},
                     )
 
             # Opportunity creation is latency-sensitive, while cleanup is
@@ -2245,7 +2303,10 @@ def schedule_astro_pairs(
 
 
 def schedule_astro_cards(signals: list[dict[str, Any]], config: AstroSdkConfig | None = None) -> dict[str, Any]:
+    from app.astro_spread_scanner import astro_spread_pair_submit_guard
+    from app.crypto import revalidate_astro_fs_borrow_pair
     resolved = config or astro_sdk_config()
     candidates = _actionable_signals(signals)
     pairs = [build_astro_fs_pair(candidate, resolved) for candidate in candidates]
-    return schedule_astro_pairs(pairs, resolved)
+    return schedule_astro_pairs(pairs, resolved, revalidator=revalidate_astro_fs_borrow_pair,
+                                submit_guard=astro_spread_pair_submit_guard)

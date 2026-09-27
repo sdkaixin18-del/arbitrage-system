@@ -30,6 +30,7 @@ from app.astro_sdk import (
     ASTRO_FF_DIRECT_EXCHANGES,
     ASTRO_FF_SELL_EXCHANGES,
     astro_ff_bybit_sell_exception_enabled,
+    astro_ff_bybit_sell_exception_min_open_pct,
     astro_ff_bybit_sell_exception,
     astro_fs_borrow_auto_card_enabled,
     astro_fs_borrow_min_cycle_profit_pct,
@@ -96,6 +97,8 @@ PULSE_URLS = (
 )
 _UNSET_SETTING = object()
 PULSE_PRIMARY_EXCHANGES = frozenset({"binance", "bybit", "bitget", "okx", "gate", "aster"})
+# Listing probes must not slow down when ordinary discovery is relaxed.
+LISTING_PROBE_INTERVAL_SECONDS = 5.0
 PULSE_MARKETS = (
     ("binanceSpot", "binance", "Binance", "spot"),
     ("binanceFuture", "binance", "Binance", "future"),
@@ -1294,7 +1297,7 @@ def spread_scan_enabled() -> bool:
 
 
 def spread_scan_interval_seconds() -> int:
-    return _env_int("ASTRO_SPREAD_SCAN_SECONDS", 10, 5, 60)
+    return _saved_int_setting("scanIntervalSeconds", _env_int("ASTRO_SPREAD_SCAN_SECONDS", 10, 5, 60), 5, 60)
 
 
 def spread_scan_min_open_pct() -> float:
@@ -1502,11 +1505,8 @@ def spread_scan_exclude_delisted_exchange_cards() -> bool:
 
 
 def _subscription_path() -> Path | None:
-    explicit = os.environ.get("ASTRO_SPREAD_SUBSCRIPTIONS_FILE", "").strip()
-    if explicit:
-        return Path(explicit).expanduser()
-    data_dir = os.environ.get("STOCK_REVIEW_DATA_DIR", "").strip()
-    return Path(data_dir).expanduser() / "astro-spread-subscriptions.json" if data_dir else None
+    from app.astro_settings import settings_path
+    return settings_path()
 
 
 def _normalize_market_keys(values: list[Any]) -> list[str]:
@@ -1519,14 +1519,8 @@ def _normalize_market_keys(values: list[Any]) -> list[str]:
 
 
 def _read_saved_subscription_payload() -> dict[str, Any]:
-    path = _subscription_path()
-    if not path or not path.exists():
-        return {}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    from app.astro_settings import read_settings
+    return read_settings(_subscription_path())
 
 
 def _saved_float_setting(key: str, default: float, minimum: float, maximum: float) -> float:
@@ -1705,7 +1699,7 @@ def _route_block_match(
 
     normalized_type = str(pair_type or "").strip().upper()
     buy_market = "spot" if normalized_type == "SF" else "future"
-    sell_market = "future"
+    sell_market = "spot" if normalized_type == "FS" else "future"
     legs = (
         (str(buy_exchange or "").strip().lower(), buy_market, "buy"),
         (str(sell_exchange or "").strip().lower(), sell_market, "sell"),
@@ -1733,6 +1727,13 @@ def _route_block_match(
 def astro_spread_pair_submit_guard(pair: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     """Fail closed against the latest saved blocks immediately before add."""
 
+    from app.astro_settings import read_settings, SettingsReadError
+    try:
+        saved = read_settings(_subscription_path(), strict=True)
+    except SettingsReadError as exc:
+        return False, {"reason": "settings_read_failed", "error": str(exc)}
+    if str(pair.get("type")).upper() == "FS" and not astro_fs_borrow_auto_card_enabled():
+        return False, {"reason": "fs_borrow_auto_card_paused"}
     from app.astro_news_policy import route_check as news_route_check
     news_block = news_route_check(pair.get("name"), pair.get("type"), pair.get("buyEx"), pair.get("sellEx"))
     if news_block:
@@ -1755,6 +1756,8 @@ def astro_spread_pair_submit_guard(pair: dict[str, Any]) -> tuple[bool, dict[str
         pair_type=pair.get("type"),
         buy_exchange=pair.get("buyEx"),
         sell_exchange=pair.get("sellEx"),
+        blocked_pairs={(item["marketKey"], item["symbol"]) for item in _normalize_blocked_pairs(saved.get("blockedPairs", []))},
+        blocked_coins=set(_normalize_blocked_coins(saved.get("blockedCoins", []))),
     )
     return (match is None, match or {"reason": "allowed"})
 
@@ -1821,6 +1824,8 @@ def update_astro_spread_subscriptions(
     delete_pullback_pct_points: Any = None,
     ff_min_open_spread_pct: Any = None,
     ff_bybit_sell_exception_enabled: Any = None,
+    ff_bybit_sell_exception_min_open_spread_pct: Any = None,
+    scan_interval_seconds: Any = None,
     sf_min_open_spread_pct: Any = None,
     sf_okxdex_min_open_spread_pct: Any = None,
     sf_pancakeswap_v3_min_open_spread_pct: Any = None,
@@ -1845,6 +1850,15 @@ def update_astro_spread_subscriptions(
     path = _subscription_path()
     if path is None:
         raise ValueError("未配置本地数据目录，无法保存 Astro 订阅")
+    from app.astro_settings import read_settings
+    previous = read_settings(path, strict=True, allow_missing=True)
+    interval = spread_scan_interval_seconds() if scan_interval_seconds is None else scan_interval_seconds
+    try:
+        parsed_interval = float(interval)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("全量发现间隔必须是 5 到 60 的整数秒") from exc
+    if isinstance(interval, bool) or not math.isfinite(parsed_interval) or not parsed_interval.is_integer() or not 5 <= parsed_interval <= 60:
+        raise ValueError("全量发现间隔必须是 5 到 60 的整数秒")
     try:
         parsed_min_volume = float(min_volume_usdt) if min_volume_usdt is not None else spread_scan_min_volume_usdt()
     except (TypeError, ValueError) as exc:
@@ -1872,6 +1886,7 @@ def update_astro_spread_subscriptions(
     if not math.isfinite(parsed_delete_pullback) or not 0 <= parsed_delete_pullback <= 100:
         raise ValueError("删除后回弱幅度必须在 0 到 100 个百分点之间")
     numeric_rules = (
+        ("Bybit 卖出腿例外差价", ff_bybit_sell_exception_min_open_spread_pct, astro_ff_bybit_sell_exception_min_open_pct(), 0.01, 100.0),
         ("FF 开仓差价", ff_min_open_spread_pct, spread_scan_ff_min_open_pct(), 0.01, 100.0),
         ("SF 开仓差价", sf_min_open_spread_pct, spread_scan_sf_min_open_pct(), 0.01, 100.0),
         ("OKXDEX 开仓差价", sf_okxdex_min_open_spread_pct, spread_scan_sf_route_min_open_pct("okxdex"), 0.01, 100.0),
@@ -1883,6 +1898,8 @@ def update_astro_spread_subscriptions(
     )
     parsed_rules: dict[str, float] = {}
     for label, raw_value, fallback, minimum, maximum in numeric_rules:
+        if isinstance(raw_value, bool):
+            raise ValueError(f"{label}必须是数字")
         try:
             parsed = float(raw_value) if raw_value is not None else fallback
         except (TypeError, ValueError) as exc:
@@ -1973,6 +1990,8 @@ def update_astro_spread_subscriptions(
         else spread_scan_dex_mapped_assets()
     )
     payload = {
+        "scanIntervalSeconds": int(parsed_interval),
+        "ffBybitSellExceptionMinOpenSpreadPct": parsed_rules["Bybit 卖出腿例外差价"],
         "markets": selected,
         "minVolumeUsdt": parsed_min_volume,
         "blockedPairs": normalized_blocked,
@@ -2006,14 +2025,20 @@ def update_astro_spread_subscriptions(
         temporary = path.with_suffix(path.suffix + ".tmp")
         temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         temporary.replace(path)
-    with _hit_lock:
-        _hits.clear()
-    with _revalidation_state_lock:
-        _revalidation_failures.clear()
-    with _hot_lock:
-        _hot_routes.clear()
-        _hot_recent_hits.clear()
-        _hot_recent_hit_at_ms.clear()
+    # Cadence-only saves preserve active hot-route tracking.
+    previous.setdefault("ffBybitSellExceptionMinOpenSpreadPct", 10.0)
+    ignored = {"updatedAt", "scanIntervalSeconds"}
+    rules_changed = ({k: v for k, v in previous.items() if k not in ignored}
+                     != {k: v for k, v in payload.items() if k not in ignored})
+    if rules_changed:
+        with _hit_lock:
+            _hits.clear()
+        with _revalidation_state_lock:
+            _revalidation_failures.clear()
+        with _hot_lock:
+            _hot_routes.clear()
+            _hot_recent_hits.clear()
+            _hot_recent_hit_at_ms.clear()
     _hot_wake.set()
     append_system_runtime_event(
         "astro_spread_subscriptions_updated",
@@ -2025,6 +2050,8 @@ def update_astro_spread_subscriptions(
             f"{len(normalized_blocked_coins)} 个全局屏蔽币种，{len(normalized_blocked)} 条定向过滤"
         ),
         details={
+            "scanIntervalSeconds": int(parsed_interval),
+            "ffBybitSellExceptionMinOpenSpreadPct": parsed_rules["Bybit 卖出腿例外差价"],
             "markets": selected,
             "minVolumeUsdt": parsed_min_volume,
             "blockedPairs": normalized_blocked,
@@ -5770,62 +5797,17 @@ def revalidate_astro_spread_pair(
         return None, report
     if str(pair.get("buyEx") or "").lower() in SF_DEX_EXCHANGES:
         return _revalidate_dex_three_quotes(pair, config)
+    if str(pair.get("sellEx") or "").lower() in SF_DEX_EXCHANGES:
+        report = {"reason": "unsupported_dex_sell_route", "roundsRequired": 0, "roundsPassed": 0}
+        _record_revalidation_outcome(pair, passed=False, report=report)
+        return None, report
     round_reports: list[dict[str, Any]] = []
     latest_pair: dict[str, Any] | None = None
-    is_okxdex = bool(SF_DEX_EXCHANGES & {
-        str(pair.get("buyEx") or "").strip().lower(),
-        str(pair.get("sellEx") or "").strip().lower(),
-    })
-    # Pulse is only discovery for OKXDEX. One official executable quote plus
-    # the same-size futures depth check is the final gate; asking Pulse for a
-    # second snapshot adds latency but no execution evidence.
-    rounds = 1 if is_okxdex else spread_final_revalidation_rounds()
-    report_source = "okx_v6_quote+exchange_public_depth" if is_okxdex else "exchange_public_api"
-    previous_dex_timestamp: int | None = None
-    dex_timestamps: list[int] = []
-    dex_prices: list[float] = []
+    rounds = spread_final_revalidation_rounds()
+    report_source = "exchange_public_api"
     for index in range(rounds):
-        attempts = 1
-        if is_okxdex and index > 0:
-            poll_seconds = spread_final_revalidation_okxdex_poll_seconds()
-            attempts = max(
-                1,
-                int(math.ceil(spread_final_revalidation_okxdex_distinct_wait_seconds() / poll_seconds)),
-            )
-
-        report: dict[str, Any] = {}
-        for attempt in range(attempts):
-            latest_pair, report = _fetch_direct_route_once(
-                pair, config, executable_depth_first=not is_okxdex,
-            )
-            if latest_pair is None:
-                break
-            dex_quote = report.get("buyQuote") if str(pair.get("buyEx") or "").lower() in SF_DEX_EXCHANGES else report.get("sellQuote")
-            dex_timestamp = int(_finite((dex_quote or {}).get("timestamp")) or 0)
-            if not is_okxdex or index == 0 or (previous_dex_timestamp is not None and dex_timestamp > previous_dex_timestamp):
-                break
-            if attempt + 1 < attempts:
-                time.sleep(spread_final_revalidation_okxdex_poll_seconds())
-
-        if latest_pair is not None and is_okxdex:
-            dex_quote = report.get("buyQuote") if str(pair.get("buyEx") or "").lower() in SF_DEX_EXCHANGES else report.get("sellQuote")
-            dex_timestamp = int(_finite((dex_quote or {}).get("timestamp")) or 0)
-            if index > 0 and (previous_dex_timestamp is None or dex_timestamp <= previous_dex_timestamp):
-                latest_pair = None
-                report = {
-                    **report,
-                    "reason": "okxdex_quote_not_advanced",
-                    "previousDexTimestamp": previous_dex_timestamp,
-                    "latestDexTimestamp": dex_timestamp,
-                    "pollAttempts": attempts,
-                }
-            else:
-                previous_dex_timestamp = dex_timestamp
-                dex_timestamps.append(dex_timestamp)
-                dex_price = _finite((dex_quote or {}).get("ask"))
-                if dex_price is not None:
-                    dex_prices.append(dex_price)
-        if not is_okxdex and latest_pair is not None and round_reports and (report.get("transport") or "local_proxy") != (round_reports[-1].get("transport") or "local_proxy"):
+        latest_pair, report = _fetch_direct_route_once(pair, config, executable_depth_first=True)
+        if latest_pair is not None and round_reports and (report.get("transport") or "local_proxy") != (round_reports[-1].get("transport") or "local_proxy"):
             # A mid-verification failover starts a fresh two-cloud-book proof;
             # never combine the old local hit with just one cloud observation.
             latest_pair["_hotDirectHit"] = {"verifiedAtMs": int(time.time() * 1000), "report": dict(report)}
@@ -5844,28 +5826,7 @@ def revalidate_astro_spread_pair(
             _record_revalidation_outcome(pair, passed=False, report=final_report)
             return None, final_report
         if index + 1 < rounds:
-            if not is_okxdex:
-                time.sleep(spread_hot_monitor_confirmation_interval_seconds())
-
-    if is_okxdex:
-        final_dex_quote = round_reports[-1].get("buyQuote") if str(pair.get("buyEx") or "").lower() in SF_DEX_EXCHANGES else round_reports[-1].get("sellQuote")
-        final_dex_age = _finite((final_dex_quote or {}).get("quoteAgeSeconds"))
-        submit_max_age = spread_final_revalidation_okxdex_submit_max_quote_age_seconds()
-        if final_dex_age is None or final_dex_age > submit_max_age:
-            report = {
-                **round_reports[-1],
-                "reason": "okxdex_quote_stale_at_submit",
-                "dexQuoteAgeAtSubmitSeconds": final_dex_age,
-                "dexSubmitMaxQuoteAgeSeconds": submit_max_age,
-                "dexQuoteTimestamps": dex_timestamps,
-                "durationMs": round((time.monotonic() - started) * 1000, 1),
-                "source": report_source,
-                "roundsRequired": rounds,
-                "roundsPassed": rounds,
-                "checks": round_reports,
-            }
-            _record_revalidation_outcome(pair, passed=False, report=report)
-            return None, report
+            time.sleep(spread_hot_monitor_confirmation_interval_seconds())
     final_report = round_reports[-1]
     report = {
         **final_report,
@@ -5878,18 +5839,6 @@ def revalidate_astro_spread_pair(
         "intervalMs": round(spread_hot_monitor_confirmation_interval_seconds() * 1000),
         "checks": round_reports,
     }
-    if is_okxdex:
-        report.update({
-            "dexQuoteTimestamps": dex_timestamps,
-            "dexQuotesDistinct": len(dex_timestamps) == rounds and len(set(dex_timestamps)) == rounds,
-            "dexQuoteAgeAtSubmitSeconds": _finite((final_dex_quote or {}).get("quoteAgeSeconds")),
-            "dexSubmitMaxQuoteAgeSeconds": spread_final_revalidation_okxdex_submit_max_quote_age_seconds(),
-            "dexPriceChangePct": (
-                round((dex_prices[-1] / dex_prices[0] - 1) * 100, 6)
-                if len(dex_prices) >= 2 and dex_prices[0] > 0
-                else None
-            ),
-        })
     if latest_pair is not None and isinstance(pair.get("_pipeline"), dict):
         latest_pair["_pipeline"] = dict(pair["_pipeline"])
     _record_revalidation_outcome(pair, passed=True, report=report)
@@ -6684,6 +6633,9 @@ def _hot_pre_api_filter(pair: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+_funding_http_local = threading.local()
+
+
 @_astro_api_priority
 def _fetch_sf_funding(url, params):
     from app.crypto import api_request_deadline
@@ -6691,10 +6643,13 @@ def _fetch_sf_funding(url, params):
     started = time.monotonic()
     sample = {"success": False}
     try:
-        # A failed pooled connection must not poison future background reads.
-        # Keep the existing two-worker bound and per-contract cache; release
-        # the entire transport on every success AND exception.
-        with api_request_deadline(timeout_seconds=6.0), httpx.Client(timeout=2.0) as client:
+        # Each of the two funding workers owns its transport. Keep successful
+        # connections warm, discard the whole transport after any failed read.
+        client = getattr(_funding_http_local, "client", None)
+        if client is None or client.is_closed:
+            client = httpx.Client(timeout=2.0, limits=httpx.Limits(max_connections=4, max_keepalive_connections=4, keepalive_expiry=30))
+            _funding_http_local.client = client
+        with api_request_deadline(timeout_seconds=6.0):
             response = _scanner_public_get(client, url, params=params)
             try:
                 response.raise_for_status()
@@ -6704,6 +6659,10 @@ def _fetch_sf_funding(url, params):
             finally:
                 response.close()
     except Exception as exc:
+        client = getattr(_funding_http_local, "client", None)
+        _funding_http_local.client = None
+        if client is not None:
+            client.close()
         sample["errorType"] = type(exc).__name__
         raise
     finally:
@@ -6749,7 +6708,7 @@ def _hot_route_direct_check(item: dict[str, Any], config: Any) -> tuple[tuple[st
             current["lastDirectCheckStartedAtMs"] = started_ms
             current["lastDirectCheckStartedMonotonic"] = started
             current["nextPollMonotonic"] = started + (
-                max(5.0, spread_scan_interval_seconds()) if current.get("listingProbe")
+                LISTING_PROBE_INTERVAL_SECONDS if current.get("listingProbe")
                 else spread_hot_monitor_interval_seconds()
             )
     if _stop.is_set():
@@ -6846,7 +6805,7 @@ def _hot_route_wait_snapshot() -> dict[str, Any]:
         "newListingRouteCount": sum("new_listing" in item.get("reasons", []) for item in current_routes),
         "listingProbeRouteCount": sum(bool(item.get("listingProbe")) for item in current_routes),
         "listingProbeMaxConcurrent": 1,
-        "listingProbeIntervalSeconds": max(5.0, spread_scan_interval_seconds()),
+        "listingProbeIntervalSeconds": LISTING_PROBE_INTERVAL_SECONDS,
         "priceBackoffRouteCount": sum(int(item.get("priceBackoffCount") or 0) >= 2 for item in current_routes),
         "adaptivePollRule": "首次及接近门槛优先；连续远离门槛逐步降为2/4/5秒，价差改善恢复快速复查；间隔包含请求时间",
     }
@@ -7622,6 +7581,7 @@ def stop_astro_spread_scanner() -> None:
 
 
 def astro_spread_scanner_status() -> dict[str, Any]:
+    from app.astro_settings import settings_health
     from app.astro_contract_safety import status as contract_safety_status
     from app.astro_news_policy import status as news_policy_status
     with _state_lock:
@@ -7633,6 +7593,7 @@ def astro_spread_scanner_status() -> dict[str, Any]:
     legacy_mapped_assets = [item for item in mapped_assets if item.get("autoCreateEligible") is not True]
     return {
         "enabled": spread_scan_enabled(),
+        "settingsHealth": settings_health(),
         "contractLifecycle": contract_safety_status(),
         "newsPolicy": news_policy_status(),
         "source": "Astro Pulse live local no-proxy direct only",
@@ -7723,7 +7684,7 @@ def astro_spread_scanner_status() -> dict[str, Any]:
                 "exchanges": sorted(ASTRO_FF_DIRECT_EXCHANGES),
                 "buyExchanges": sorted(ASTRO_FF_BUY_EXCHANGES),
                 "sellExchanges": sorted(ASTRO_FF_SELL_EXCHANGES),
-                "bybitSellException": {"enabled": astro_ff_bybit_sell_exception_enabled(), "minOpenSpreadPctExclusive": 10.0},
+                "bybitSellException": {"enabled": astro_ff_bybit_sell_exception_enabled(), "minOpenSpreadPctExclusive": astro_ff_bybit_sell_exception_min_open_pct()},
                 "gcCompanion": "不创建任何 GC 卡",
                 "structureFilter": {
                     "enabled": structure_filter_enabled(),

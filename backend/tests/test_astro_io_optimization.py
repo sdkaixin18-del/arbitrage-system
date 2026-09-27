@@ -81,10 +81,11 @@ def test_replacement_id_finishes_old_cleanup_without_adopting(monkeypatch,tmp_pa
     assert record['invalidObservedAt'] is None
 
 
-def test_funding_worker_closes_clients_after_success_and_failure(monkeypatch):
+def test_funding_worker_reuses_success_and_discards_failure(monkeypatch):
     import httpx
     from app import astro_spread_scanner as scanner, crypto
     clients=[]
+    monkeypatch.setattr(scanner, '_funding_http_local', threading.local())
     def get(client,*args,**kwargs):
         assert getattr(crypto._api_priority_local,'level')=='astro'
         assert 5 < crypto.api_request_remaining_seconds() <= 6
@@ -99,8 +100,9 @@ def test_funding_worker_closes_clients_after_success_and_failure(monkeypatch):
             with pytest.raises(httpx.PoolTimeout):scanner._fetch_sf_funding('https://example.com',{})
         else:
             assert scanner._fetch_sf_funding('https://example.com',{})=={'ok':True}
-        assert clients[-1].is_closed
-    assert len({id(c) for c in clients})==30
+        assert clients[-1].is_closed is ((n+1) % 3 == 0)
+    assert len({id(c) for c in clients})==10
+    assert all(c.is_closed for c in clients)
 
 
 def test_funding_completion_cannot_approve_old_spread(monkeypatch,tmp_path):

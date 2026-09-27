@@ -120,25 +120,34 @@ class PersistentPulseSSH:
             if not chunk:
                 detail = ""
                 if self.process.stderr is not None:
-                    try: detail = self.process.stderr.read(2048).decode(errors="replace").strip()
+                    try:
+                        ready, _, _ = select.select([self.process.stderr.fileno()], [], [], 0)
+                        if ready:
+                            detail = os.read(self.process.stderr.fileno(), 2048).decode(errors="replace").strip()
                     except OSError: pass
                 suffix = f": {detail}" if detail else ""
                 raise ConnectionError(f"Pulse SSH stream closed (exit={self.process.poll()}){suffix}")
             self.buffer.extend(chunk)
 
     def fetch(self, timeout: float) -> dict:
-        with self.lock:
+        deadline = time.monotonic() + timeout + 0.75
+        if not self.lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+            raise TimeoutError("Pulse SSH queue deadline exhausted")
+        try:
             started = time.perf_counter()
             last_error: Exception | None = None
             for attempt in range(2):
                 try:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0.25:
+                        raise TimeoutError("Pulse SSH total deadline exhausted")
                     self.connect()
                     assert self.process is not None and self.process.stdin is not None
                     request_id = os.urandom(12).hex()
-                    self.process.stdin.write(json.dumps({"id":request_id,"timeoutSeconds":timeout}).encode()+b"\n")
+                    self.process.stdin.write(json.dumps({"id":request_id,"timeoutSeconds":min(timeout, max(1.0, remaining - 0.25))}).encode()+b"\n")
                     self.process.stdin.flush()
                     while True:
-                        response = json.loads(self._readline(timeout + 0.75))
+                        response = json.loads(self._readline(max(0.0, deadline - time.monotonic())))
                         if response.get("id") == request_id:
                             break
                     if not response.get("ok"):
@@ -153,11 +162,14 @@ class PersistentPulseSSH:
                 except Exception as error:
                     last_error = error
                     self.close()
-                    if attempt == 0:
+                    if attempt == 0 and deadline - time.monotonic() > 0.25:
                         continue
+                    break
             assert last_error is not None
             self.last_error = f"{type(last_error).__name__}: {last_error}"
             raise last_error
+        finally:
+            self.lock.release()
 
     def status(self) -> dict:
         connected = self.process is not None and self.process.poll() is None
@@ -198,9 +210,13 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as error:
                 body, status = {**self.server.bridge.status(),"error":f"{type(error).__name__}: {error}"}, HTTPStatus.SERVICE_UNAVAILABLE
         payload = json.dumps(body,separators=(",",":"),ensure_ascii=False).encode()
-        self.send_response(status); self.send_header("Content-Type","application/json; charset=utf-8")
-        self.send_header("Content-Length",str(len(payload))); self.send_header("Cache-Control","no-store")
-        self.end_headers(); self.wfile.write(payload)
+        try:
+            self.send_response(status); self.send_header("Content-Type","application/json; charset=utf-8")
+            self.send_header("Content-Length",str(len(payload))); self.send_header("Cache-Control","no-store")
+            self.end_headers(); self.wfile.write(payload)
+        except (BrokenPipeError, ConnectionResetError):
+            # Caller cancellation is not an SSH/upstream failure.
+            self.close_connection = True
 
 
 def main() -> int:

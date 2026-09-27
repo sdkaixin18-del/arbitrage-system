@@ -1,0 +1,124 @@
+/* Scoped to Astro; the scanner and other workspaces are unchanged. */
+.ant-layout-content:has(.astro-workspace) { background: #f5f6f8; }
+.astro-workspace { color: #252a32; padding: 20px 24px 28px; max-width: 1440px; }
+.astro-workspace *, .astro-workspace *::before, .astro-workspace *::after { letter-spacing: 0; }
+.astro-workspace .astro-workspace-header { display: flex; align-items: center; gap: 32px; border-bottom: 1px solid #dce0e5; margin-bottom: 22px; }
+.astro-workspace .astro-workspace-header h2 { flex-shrink: 0; font-size: 23px; margin: 0; padding-bottom: 14px; }
+.astro-workspace .astro-workspace-tabs { margin: 0; border: 0; gap: 24px; }
+.astro-workspace .astro-workspace-tabs a { display: flex; gap: 8px; align-items: center; font-size: 14px; padding: 8px 0 16px; color: #626975; }
+.astro-workspace .astro-workspace-tabs a.is-active { color: #246b54; border-color: #246b54; }
+.astro-workspace .astro-page-toolbar { align-items: center; gap: 12px; margin-bottom: 16px; }
+.astro-workspace .astro-page-toolbar h3 { font-size: 18px; margin: 0; }
+.astro-workspace .astro-page-toolbar .ant-typography-secondary { display: block; font-size: 12px; margin-top: 4px; color: #626975; }
+.astro-workspace .astro-rules-card { border: 0; border-top: 1px solid #dfe3e8; border-radius: 0; padding: 18px 0; margin: 0; box-shadow: none; background: transparent; min-width: 0; scroll-margin-top: 70px; }
+.astro-workspace .astro-rules-section-head { gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.astro-workspace .astro-rules-section-head strong { font-size: 14px; color: #252a32; }
+.astro-workspace details > summary { cursor: pointer; font-weight: 600; color: #525b68; font-size: 13px; }
+.astro-workspace details[open] > summary { margin-bottom: 14px; }
+.astro-workspace details p, .astro-workspace details .ant-typography { font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
+.astro-workspace .ant-alert { margin-bottom: 12px; border-radius: 6px; }
+.astro-workspace .ant-tag { border-radius: 4px; white-space: normal; }
+.astro-workspace .astro-status-summary { gap: 0; padding: 16px 0; margin-bottom: 10px; background: #fff; border-top: 1px solid #e1e4e9; border-bottom: 1px solid #e1e4e9; }
+.astro-workspace .astro-status-summary > div { background: none; border: 0; border-right: 1px solid #e5e8ed; border-radius: 0; padding: 0 18px; gap: 6px; }
+.astro-workspace .astro-status-summary > div:last-child { border-right: 0; }
+.astro-workspace .astro-status-summary strong { font-size: 20px; color: #246b54; font-variant-numeric: tabular-nums; }
+.astro-workspace .astro-status-summary span, .astro-workspace .astro-status-summary small { color: #646d78; font-size: 12px; line-height: 1.6; }
+.astro-workspace .astro-status-summary > div:nth-child(3) strong { color: #525b68; }
+.astro-workspace .astro-status-summary > div:nth-child(4) strong { color: #286caf; }
+.astro-workspace .astro-status-summary.is-stale strong { color: #996719; }
+.astro-workspace .astro-quiet-status { font-size: 12px; color: #626975; padding: 8px 0 14px; }
+.astro-workspace .astro-metric-strip { display: grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap: 10px; }
+.astro-workspace .astro-metric-strip > div { display: grid; gap: 6px; padding: 4px 0; }
+.astro-workspace .astro-metric-strip span { font-size: 12px; color: #626975; }
+.astro-workspace .astro-metric-strip strong { font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; color: #303743; }
+.astro-workspace .astro-cloud-queue { color: #626975; font-size: 12px; font-variant-numeric: tabular-nums; }
+.astro-workspace .ant-table { font-size: 12px; font-variant-numeric: tabular-nums; }
+.astro-workspace .ant-table-thead > tr > th { background: #edf0f4; color: #525b68; font-weight: 500; }
+.astro-workspace .ant-table-tbody > tr > td { vertical-align: top; padding-top: 12px; padding-bottom: 12px; }
+.astro-workspace .ant-tabs > .ant-tabs-nav { margin: 0 0 12px; }
+.astro-workspace .ant-tabs-tab { padding: 8px 0; }
+.astro-workspace .astro-route-detail { padding: 4px 12px; }
+.astro-workspace .astro-route-name { display: grid; gap: 4px; min-width: 135px; }
+.astro-workspace .astro-route-name strong { font-size: 13px; }
+.astro-workspace .astro-route-name small, .astro-workspace .astro-route-name span { font-size: 11px; font-weight: 400; color: #68717d; }
+.astro-workspace pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 200px; overflow: auto; }
+.astro-workspace .astro-rule-jumps { display: flex; flex-wrap: wrap; gap: 24px; padding: 12px 0; background: #f5f6f8; position: sticky; top: 0; z-index: 5; border-bottom: 1px solid #dfe3e8; }
+.astro-workspace .astro-rule-jumps a { color: #525b68; font-size: 13px; }
+.astro-workspace .astro-rule-jumps a:hover { color: #246b54; text-decoration: underline; }
+.astro-workspace .astro-auto-rule-list { border: 0; border-radius: 0; overflow: visible; }
+.astro-workspace .astro-auto-rule-row { grid-template-columns: 34px minmax(190px,1fr) 180px 180px; gap: 16px; min-height: 84px; padding: 14px 16px; border-bottom: 1px solid #edf0f3; border-radius: 0; }
+.astro-workspace .astro-auto-rule-row .astro-auto-rule-copy { min-width: 0; }
+.astro-workspace .astro-auto-rule-copy strong { color: #252a32; font-size: 14px; }
+.astro-workspace .astro-auto-rule-copy span { color: #68717d; font-size: 12px; line-height: 1.65; }
+.astro-workspace .astro-auto-rule-index { color: #8a929d; font-variant-numeric: tabular-nums; font-weight: 500; }
+.astro-workspace .astro-auto-rule-row label { min-width: 0; gap: 6px; position: relative; }
+.astro-workspace .astro-auto-rule-row label > span { font-size: 12px; color: #626975; font-weight: 400; }
+.astro-workspace .ant-input-number { font-variant-numeric: tabular-nums; }
+.astro-workspace .ant-input-number-input { text-align: right; }
+/* Reserve the stepper lane even before hover so right-aligned values never move or overlap it. */
+.astro-workspace .ant-input-number:has(.ant-input-number-handler-wrap) .ant-input-number-input { padding-inline-end: 32px; }
+.astro-workspace .ant-input-number .ant-input-number-handler-wrap,
+.astro-workspace .ant-input-number:hover .ant-input-number-handler-wrap { width: 22px; opacity: 1; }
+.astro-workspace .ant-input-number-group-addon { color: #68717d; background: #f5f6f8; min-width: 32px; }
+.astro-workspace .ant-switch { min-width: 36px; width: 36px; height: 22px; justify-self: start; flex-shrink: 0; }
+.astro-workspace .astro-auto-rule-switch { min-width: 0; flex-wrap: wrap; }
+.astro-workspace .astro-auto-rule-row.is-disabled { background: #f1f3f5; }
+.astro-workspace .astro-auto-rule-row.is-disabled .astro-auto-rule-copy strong { color: #767e88; }
+.astro-workspace .astro-auto-fs-rule-row { grid-template-columns: 34px minmax(170px,1fr) 100px 180px 180px; }
+.astro-workspace .astro-auto-fs-rule-row > .astro-auto-rule-switch { grid-column: auto; }
+.astro-workspace .astro-dex-switches { grid-column: 2 / -1; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 0 28px; }
+.astro-workspace .astro-rule-evidence { grid-column: 1 / -1; padding: 2px 0 10px; }
+.astro-workspace .astro-dex-switches > .astro-auto-rule-switch { display: grid; grid-template-columns: 36px minmax(0,1fr); background: none; border: 0; border-radius: 0; padding: 12px 0; }
+.astro-workspace .astro-dex-switches > .astro-auto-rule-switch label { grid-column: 1 / -1; }
+.astro-workspace #card-rules .astro-auto-rule-row { grid-template-columns: 34px minmax(190px,1fr) 180px 180px 80px; }
+.astro-workspace .astro-auto-alert-rule-row > .astro-alert-rise-only { display: inline-flex; gap: 0; align-self: end; align-items: center; min-height: 32px; margin: 0; white-space: nowrap; }
+.astro-workspace .astro-alert-rise-only .ant-checkbox-label { padding-inline: 6px 0; }
+.astro-workspace .astro-auto-rule-row.is-locked { background: #eef2f6; }
+.astro-workspace [data-modified="true"] { outline: 2px solid #d7a549; outline-offset: 2px; border-radius: 4px; }
+.astro-workspace label:has([data-modified="true"]) > span:first-child::after { content: " · 未保存"; color: #956014; font-size: 11px; }
+.astro-workspace .astro-rules-basic-grid { background: #fff; padding: 16px; gap: 20px; }
+.astro-workspace .astro-subscription-card { border-radius: 6px; box-shadow: none; }
+.astro-workspace .astro-rule-savebar { position: sticky; bottom: 0; z-index: 6; display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 16px; background: #fff; border-top: 1px solid #d9dfe5; box-shadow: 0 -3px 12px #24314008; margin-top: 16px; }
+.astro-workspace .astro-rule-savebar > span { color: #626975; font-size: 12px; }
+.astro-change-list { max-height: 55vh; overflow: auto; margin-top: 16px; }
+.astro-change-list > div { padding: 12px 0; border-bottom: 1px solid #e7eaf0; }
+.astro-change-list strong { display: block; font-size: 13px; margin-bottom: 6px; }
+.astro-change-list del { color: #7b818b; }
+.astro-change-list b { color: #246b54; font-weight: 500; }
+.astro-change-list div { overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+@media (max-width: 1100px) {
+  .astro-workspace .astro-auto-rule-row { grid-template-columns: 30px minmax(160px,1fr) 150px 150px; gap: 12px; }
+  .astro-workspace #card-rules .astro-auto-rule-row { grid-template-columns: 30px minmax(160px,1fr) 150px 150px 74px; }
+  .astro-workspace .astro-auto-fs-rule-row > .astro-auto-rule-switch { grid-column: 2; }
+  .astro-workspace .astro-auto-fs-rule-row > label { grid-row: 2; }
+  .astro-workspace .astro-metric-strip { grid-template-columns: repeat(3,minmax(0,1fr)); gap: 16px; }
+}
+@media (max-width: 760px) {
+  .astro-workspace { padding: 16px 14px; }
+  .astro-workspace .astro-workspace-header { display: block; margin-bottom: 16px; }
+  .astro-workspace .astro-workspace-header h2 { font-size: 21px; padding-bottom: 10px; }
+  .astro-workspace .astro-workspace-tabs { gap: 22px; }
+  .astro-workspace .astro-workspace-tabs a { font-size: 13px; padding-bottom: 12px; }
+  .astro-workspace .astro-status-summary { grid-template-columns: repeat(2,minmax(0,1fr)); row-gap: 18px; }
+  .astro-workspace .astro-status-summary > div { padding: 0 12px; }
+  .astro-workspace .astro-status-summary > div:nth-child(2) { border-right: 0; }
+  .astro-workspace .astro-page-toolbar { flex-direction: row; align-items: center; }
+  .astro-workspace .astro-auto-rule-row { grid-template-columns: 26px minmax(0,1fr) minmax(0,1fr); padding: 14px 10px; gap: 12px; }
+  .astro-workspace #card-rules .astro-auto-rule-row { grid-template-columns: 26px minmax(0,1fr) minmax(0,1fr); }
+  .astro-workspace .astro-auto-alert-rule-row > .astro-alert-rise-only { grid-column: 3; min-height: 22px; justify-self: start; }
+  .astro-workspace .astro-auto-rule-copy { grid-column: 2 / -1; }
+  .astro-workspace .astro-auto-rule-row > label, .astro-workspace .astro-auto-rule-row > .astro-auto-price-change-control { grid-column: 2; grid-row: auto; }
+  .astro-workspace .astro-auto-rule-row > label + label, .astro-workspace .astro-auto-rule-row > label + .astro-auto-price-change-control { grid-column: 3; }
+  .astro-workspace .astro-auto-rule-row > .astro-auto-rule-switch { grid-column: 2 / -1; }
+  .astro-workspace .astro-auto-fs-rule-row > label { grid-row: auto; }
+  .astro-workspace .astro-auto-rule-row > .ant-tag { grid-column: 2 / -1; justify-self: start; }
+  .astro-workspace .astro-dex-switches { grid-column: 2 / -1; grid-template-columns: 1fr; }
+  .astro-workspace .astro-rule-jumps { gap: 18px; }
+  .astro-workspace .astro-rule-jumps a { font-size: 12px; }
+  .astro-workspace .astro-rules-basic-grid, .astro-workspace .astro-rules-pair-editor, .astro-workspace .astro-mapping-form { grid-template-columns: 1fr; }
+  .astro-workspace .astro-rule-savebar { padding: 12px 8px; flex-wrap: wrap; }
+  .astro-workspace .astro-rule-savebar .ant-btn { font-size: 12px; padding-inline: 10px; }
+  .astro-workspace .astro-rule-savebar > span { flex: 1 0 100%; }
+  .astro-workspace .astro-metric-strip strong { font-size: 17px; }
+  .astro-workspace .astro-metric-strip span { font-size: 11px; }
+}

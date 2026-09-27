@@ -44,6 +44,7 @@ USER_AGENT = (
 )
 
 BINANCE_ARTICLE_API = "https://www.binance.com/bapi/composite/v1/public/cms/article/list/query"
+BINANCE_ARTICLE_DETAIL_API = "https://www.binance.com/bapi/composite/v1/public/cms/article/detail/query"
 BYBIT_ANNOUNCEMENT_API = "https://api.bybit.com/v5/announcements/index"
 BYBIT_INSTRUMENTS_API = "https://api.bybit.com/v5/market/instruments-info"
 ASTER_ANNOUNCEMENT_API = (
@@ -154,6 +155,10 @@ RESUMPTION_KEYWORDS = (
     "重新開放交易",
 )
 MIGRATION_KEYWORDS = (
+    "token merge",
+    "token merger",
+    "代币合并",
+    "代幣合併",
     "token migration",
     "contract migration",
     "ticker change",
@@ -676,27 +681,58 @@ def get_exchange_announcements(
     return with_push_context(dict(_cache), db)
 
 
+_announcement_fetch_lock = threading.Lock()
+_announcement_refresh_lock = threading.Lock()
+_announcement_futures: dict[str, Any] = {}
+_announcement_executor: ThreadPoolExecutor | None = None
+_announcement_completed: dict[str, tuple[float, str]] = {}
+
+
 def fetch_sources(fetchers: list[tuple[str, Any]]) -> list[tuple[str, list[dict[str, Any]], str | None]]:
-    results: dict[str, tuple[str, list[dict[str, Any]], str | None]] = {}
-    worker_limit = max(1, min(int(os.environ.get("EXCHANGE_ANN_FETCH_WORKERS", "3")), len(fetchers)))
-    executor = ThreadPoolExecutor(max_workers=worker_limit, thread_name_prefix="exchange-ann")
-    futures = {executor.submit(fetcher): exchange for exchange, fetcher in fetchers}
+    """Keep at most one running request per source across refresh timeouts.
+
+    A timed-out thread cannot be cancelled by Future.cancel(). Retain it until
+    completion instead of spawning another fetch on the following refresh.
+    """
+    global _announcement_executor
+    if not fetchers:
+        return []
+    with _announcement_fetch_lock:
+        if _announcement_executor is None:
+            workers = max(1, min(int(os.environ.get("EXCHANGE_ANN_FETCH_WORKERS", "3")), 7))
+            _announcement_executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="exchange-ann")
+        futures = {}
+        for exchange, fetcher in fetchers:
+            future = _announcement_futures.get(exchange)
+            if future is None:
+                def run(current_fetcher=fetcher):
+                    try:
+                        return current_fetcher(), None, time.monotonic(), datetime.now(timezone.utc).isoformat()
+                    except Exception as exc:
+                        return [], str(exc), time.monotonic(), datetime.now(timezone.utc).isoformat()
+                future = _announcement_executor.submit(run)
+                _announcement_futures[exchange] = future
+            futures[future] = exchange
+    results = {}
     try:
         for future in as_completed(futures, timeout=_FETCH_BUDGET_SECONDS):
             exchange = futures[future]
-            try:
-                results[exchange] = (exchange, future.result(), None)
-            except Exception as exc:
-                results[exchange] = (exchange, [], str(exc))
+            rows, error, completed_mono, completed_at = future.result()
+            results[exchange] = (exchange, rows, error)
+            with _announcement_fetch_lock:
+                if _announcement_futures.get(exchange) is future:
+                    _announcement_futures.pop(exchange, None)
+                _announcement_completed[exchange] = (completed_mono, completed_at)
     except TimeoutError:
         pass
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+    return [results.get(exchange, (exchange, [], f"读取超时（>{_FETCH_BUDGET_SECONDS}s）；原请求继续，后续复用结果"))
+            for exchange, _ in fetchers]
 
-    for exchange, _fetcher in fetchers:
-        if exchange not in results:
-            results[exchange] = (exchange, [], f"读取超时（>{_FETCH_BUDGET_SECONDS}s）")
-    return [results[exchange] for exchange, _fetcher in fetchers]
+
+def source_retry_seconds(exchange: str, state: dict[str, Any]) -> int:
+    interval = source_refresh_seconds(exchange)
+    failures = int(state.get("consecutive_failures") or 0)
+    return min(300, interval * (2 ** min(max(0, failures - 1), 3))) if failures else interval
 
 
 def source_refresh_seconds(exchange: str) -> int:
@@ -709,7 +745,14 @@ def source_refresh_seconds(exchange: str) -> int:
     return max(30, min(configured, 600))
 
 
-def fetch_announcement_sources(
+def fetch_announcement_sources(fetchers, *, force_refresh):
+    # Serialize cache commits so overlapping page/background refreshes cannot
+    # overwrite a newer success with an older timeout.
+    with _announcement_refresh_lock:
+        return _fetch_announcement_sources(fetchers, force_refresh=force_refresh)
+
+
+def _fetch_announcement_sources(
     fetchers: list[tuple[str, Any]],
     *,
     force_refresh: bool,
@@ -727,7 +770,8 @@ def fetch_announcement_sources(
         state = cached.get(exchange) or {}
         interval = source_refresh_seconds(exchange)
         last_attempt_monotonic = float(state.get("last_attempt_monotonic") or 0.0)
-        due = force_refresh or not state or now_monotonic - last_attempt_monotonic >= interval
+        retry_interval = source_retry_seconds(exchange, state)
+        due = force_refresh or not state or now_monotonic - last_attempt_monotonic >= retry_interval
         if not due:
             continue
 
@@ -759,8 +803,9 @@ def fetch_announcement_sources(
                 state["duration_ms"] = durations.get(exchange)
                 if error is None:
                     state["items"] = list(rows)
-                    state["last_success_at"] = now_utc.isoformat()
-                    state["last_success_monotonic"] = now_monotonic
+                    completed_mono, completed_at = _announcement_completed.get(exchange, (now_monotonic, now_utc.isoformat()))
+                    state["last_success_at"] = completed_at
+                    state["last_success_monotonic"] = completed_mono
                     state["consecutive_failures"] = 0
                     state["last_error"] = None
                 else:
@@ -787,7 +832,7 @@ def fetch_announcement_sources(
             last_attempt_monotonic = float(state.get("last_attempt_monotonic") or 0.0)
             next_refresh_seconds = max(
                 0,
-                round(interval - max(0.0, now_monotonic - last_attempt_monotonic)),
+                round(source_retry_seconds(exchange, state) - max(0.0, now_monotonic - last_attempt_monotonic)),
             ) if last_attempt_monotonic else 0
             state["refresh_interval_seconds"] = interval
             _source_cache[exchange] = state
@@ -3325,8 +3370,10 @@ def fetch_binance() -> list[dict[str, Any]]:
         ("listing", 48, "新币上线"),
         ("delisting", 161, "下架公告"),
         ("unknown", 49, "币安最新公告"),
+        ("unknown", 157, "维护更新"),
     ]
     with http_client() as client:
+        seen_codes: set[str] = set()
         for action, catalog_id, category in catalogs:
             payload = get_response(
                 client,
@@ -3338,6 +3385,27 @@ def fetch_binance() -> list[dict[str, Any]]:
             data = payload.json()
             for article in data.get("data", {}).get("catalogs", [{}])[0].get("articles", []):
                 title = str(article.get("title") or "").strip()
+                code = str(article.get("code") or "")
+                if not code or code in seen_codes:
+                    continue
+                seen_codes.add(code)
+                if action_from_title(title) == "migration":
+                    try:
+                        detail = get_response(
+                            client,
+                            BINANCE_ARTICLE_DETAIL_API,
+                            params={"articleCode": code},
+                            headers={"lang": "en", "clienttype": "web"},
+                        )
+                        detail.raise_for_status()
+                        rows.extend(binance_migration_delistings(article, detail.json().get("data") or {}))
+                    except (httpx.HTTPError, ValueError, TypeError, KeyError) as exc:
+                        exchange_monitor_log(
+                            "binance_migration_detail_failed",
+                            article_code=code,
+                            error=redact_monitor_text(str(exc)),
+                            level="warning",
+                        )
                 item = build_item(
                     exchange="bn",
                     action=action,
@@ -3349,6 +3417,76 @@ def fetch_binance() -> list[dict[str, Any]]:
                 )
                 if is_relevant(item):
                     rows.append(item)
+    return rows
+
+
+def binance_article_text(node: Any) -> str:
+    if not isinstance(node, dict):
+        return ""
+    if node.get("node") == "text":
+        return html.unescape(str(node.get("text") or ""))
+    return "".join(binance_article_text(child) for child in node.get("child") or [])
+
+
+def binance_migration_delistings(article: dict[str, Any], detail: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract only explicitly timed futures removals from mixed token-change notices."""
+    title = str(article.get("title") or "")
+    code = str(article.get("code") or "")
+    body = detail.get("body")
+    if not title or not code or not body:
+        return []
+    root = json.loads(body) if isinstance(body, str) else body
+    if not isinstance(root, dict):
+        return []
+    source_symbols = re.findall(r"[（(]([A-Z][A-Z0-9]{1,24})[）)]", title)
+    if not source_symbols:
+        return []
+    source_symbol = source_symbols[0]
+    section = ""
+    rows: list[dict[str, Any]] = []
+    for block in root.get("child") or []:
+        tag = str(block.get("tag") or "") if isinstance(block, dict) else ""
+        if tag in {"h2", "h3", "h4"}:
+            section = binance_article_text(block).strip().lower()
+            continue
+        if section not in {"futures", "合约", "合約"}:
+            continue
+        paragraphs = block.get("child") or [] if isinstance(block, dict) else []
+        segments = paragraphs if tag in {"ul", "ol"} else [block]
+        for segment in segments:
+            content = normalize_text(binance_article_text(segment))
+            lower = content.lower()
+            if not (
+                ("close all positions" in lower or "平仓" in content or "平倉" in content)
+                and ("removed" in lower or "delist" in lower or "下架" in content or "移除" in content)
+            ):
+                continue
+            pairs = strict_usdt_pair_symbols(content)
+            if pairs and source_symbol not in pairs:
+                continue
+            event_at = extract_event_at(content)
+            if not event_at or not re.search(r"20\d{2}[-/.年]\s*\d{1,2}[-/.月]\s*\d{1,2}", content):
+                continue
+            item = build_item(
+                exchange="bn",
+                action="delisting",
+                market_type="contract",
+                title=f"{title} | {source_symbol}USDT合约下架",
+                url=f"https://www.binance.com/zh-CN/support/announcement/{code}",
+                published_at=iso_from_millis(article.get("releaseDate")),
+                category="维护更新",
+                event_context=content,
+            )
+            item["action"] = "delisting"
+            item["action_label"] = ACTION_LABELS["delisting"]
+            item["symbols"] = [source_symbol]
+            item["event_at"] = event_at
+            item["event_at_sort"] = sort_timestamp(event_at)
+            event_dt = parse_event_datetime(event_at)
+            item["has_occurred"] = bool(event_dt and event_dt <= datetime.now(BEIJING_TZ))
+            item["event_status"] = "已发生" if item["has_occurred"] else "未发生"
+            item["seconds_until_event"] = max(0, int((event_dt - datetime.now(BEIJING_TZ)).total_seconds())) if event_dt else 0
+            rows.append(item)
     return rows
 
 
@@ -3967,34 +4105,29 @@ def fetch_gate() -> list[dict[str, Any]]:
 
 
 def fetch_gate_via_next_data(client: httpx.Client) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    errors: list[str] = []
-    for default_action, default_market, source_url in GATE_SECTION_URLS:
-        section_rows: list[dict[str, Any]] = []
-        section_errors: list[str] = []
+    def section(spec):
+        default_action, default_market, source_url = spec
+        errors = []
         for candidate_url in gate_section_url_candidates(source_url):
             try:
                 response = get_response(client, candidate_url)
                 response.raise_for_status()
-                section_rows = extract_gate_next_data_articles(
-                    response.text,
-                    source_url=candidate_url,
-                    default_action=default_action,
-                    default_market=default_market,
-                    category="Gate 公告",
+                rows = extract_gate_next_data_articles(
+                    response.text, source_url=candidate_url, default_action=default_action,
+                    default_market=default_market, category="Gate 公告",
                 )
-                if section_rows:
-                    break
-                section_errors.append(f"{candidate_url}: 未找到目标公告")
+                if rows:
+                    return rows, None
+                errors.append("未找到目标公告")
             except Exception as exc:
-                section_errors.append(f"{candidate_url}: {exc}")
-        if section_rows:
-            rows.extend(section_rows)
-        elif section_errors:
-            errors.append(
-                f"{default_action}: "
-                + "; ".join(error for error in section_errors if error)
-            )
+                errors.append(str(exc))
+        return [], default_action + ": " + "; ".join(errors)
+    rows, errors = [], []
+    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="gate-ann-section") as pool:
+        for found, error in pool.map(section, GATE_SECTION_URLS):
+            rows.extend(found)
+            if error:
+                errors.append(error)
     if not rows and errors:
         raise RuntimeError("Gate 结构化公告读取失败：" + " | ".join(errors))
     return rows

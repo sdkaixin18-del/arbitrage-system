@@ -2415,3 +2415,15 @@ class MarketReviewAiSetting(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc, nullable=False)
+
+
+class AsterFundingRankSnapshot(Base):
+    __tablename__ = "aster_funding_rank_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    as_of_ms: Mapped[int] = mapped_column(Integer, unique=True, index=True, nullable=False)
+    generated_at_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    market_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    eligible_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    ranked_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    rows_json: Mapped[str] = mapped_column(Text, nullable=False)

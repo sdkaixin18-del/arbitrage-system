@@ -43,21 +43,13 @@ def _registry_path() -> Path | None:
 
 
 def _subscription_path() -> Path | None:
-    explicit = os.environ.get("ASTRO_SPREAD_SUBSCRIPTIONS_FILE", "").strip()
-    if explicit:
-        return Path(explicit).expanduser()
-    data_dir = os.environ.get("STOCK_REVIEW_DATA_DIR", "").strip()
-    return Path(data_dir).expanduser() / "astro-spread-subscriptions.json" if data_dir else None
+    from app.astro_settings import settings_path
+    return settings_path()
 
 
 def _read_json(path: Path | None) -> dict[str, Any]:
-    if not path or not path.exists():
-        return {}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    from app.astro_settings import read_settings
+    return read_settings(path)
 
 
 def astro_delete_rearm_pct() -> float:
@@ -265,11 +257,15 @@ AUTO_CARD_SNAPSHOT_VERSION = 2
 _SNAPSHOT_FIELDS = ("name", "type", "buyEx", "sellEx", *AUTO_CARD_CONFIG_FIELDS)
 
 
+def price_alert_explicitly_disabled(pair: dict[str, Any]) -> bool:
+    # Astro's shipped editor renders explicit null as an empty/disabled alert
+    # and submits it as "". An absent field is still unknown, never disabled.
+    return "priceAlert" in pair and pair["priceAlert"] in (None, "")
+
+
 def inactive_unreadable_config_fields(snapshot: dict[str, Any], actual: dict[str, Any]) -> set[str]:
-    # The SDK uses an empty priceAlert to disable price-change notifications.
-    # Its direction selector is behaviorally inactive only when both observed
-    # configurations explicitly disable that alert. Missing is not False.
-    if snapshot.get("priceAlert") == "" and actual.get("priceAlert") == "" and "priceAlertOnlyRise" not in actual:
+    if (price_alert_explicitly_disabled(snapshot) and price_alert_explicitly_disabled(actual)
+            and "priceAlertOnlyRise" not in actual):
         return {"priceAlertOnlyRise"}
     return set()
 
@@ -439,7 +435,15 @@ def mark_submission_not_executed(pair: dict[str, Any], reason: str) -> None:
             _save_registry(payload)
 
 
-def resolve_reviewed_submission(submission_id: str, evidence: str) -> dict[str, Any]:
+def validate_submission_review(pair: dict[str, Any], reviewed_route: str | None) -> str:
+    name, kind, buy, sell = pair_identity(pair)
+    expected = f"{name} {kind} {buy}/{sell}"
+    if not isinstance(reviewed_route, str) or reviewed_route.strip().casefold() != expected.casefold():
+        raise ValueError("核对路线与本次提交不一致，请完整填写币种、类型和买卖交易所")
+    return expected
+
+
+def resolve_reviewed_submission(submission_id: str, evidence: str, reviewed_route: str | None = None) -> dict[str, Any]:
     """Explicit operator attestation, not an inference from failed list reads."""
     if not submission_id or not isinstance(evidence, str) or not 10 <= len(evidence.strip()) <= 1000:
         raise ValueError("需要提交编号和已核实未执行的证据（10–1000字）")
@@ -449,7 +453,8 @@ def resolve_reviewed_submission(submission_id: str, evidence: str) -> dict[str, 
         if len(matches) != 1 or matches[0][1].get("state") != "needs_review":
             raise ValueError("提交状态已变化或尚在自动核对中，请刷新后核对")
         key, record = matches[0]
-        _archive_submission(payload, record, "failed_not_executed", "人工核实：" + evidence.strip())
+        route = validate_submission_review(record["pair"], reviewed_route)
+        _archive_submission(payload, record, "failed_not_executed", f"人工核实 [{route}]：" + evidence.strip())
         del payload["pendingSubmissions"][key]
         _save_registry(payload)
         return {"submissionId": submission_id, "route": pair_identity(record["pair"]), "state": "failed_not_executed"}
@@ -511,6 +516,17 @@ def auto_created_route_records() -> list[dict[str, Any]]:
         return [dict(record) for record in payload["routes"].values() if isinstance(record, dict)]
 
 
+def record_cleanup_protection(pair: dict[str, Any], reason: str) -> None:
+    with _registry_lock:
+        payload = _load_registry()
+        for record in payload["routes"].values():
+            if (isinstance(record, dict) and pair_identity(record) == pair_identity(pair)
+                    and record.get("astroPairId") and str(record["astroPairId"]) == str(pair.get("id") or "")):
+                record["cleanupProtection"] = {"reason": reason, "observedAt": _iso(_utc_now()), "cardId": str(pair["id"])}
+                _save_registry(payload)
+                return
+
+
 def observe_auto_card_cleanup(
     observations: dict[RouteIdentity, dict[str, Any]],
     existing_pairs: list[dict[str, Any]],
@@ -537,6 +553,12 @@ def observe_auto_card_cleanup(
             observation = observations.get(identity)
             registered_id = str(record.get("astroPairId") or "")
             current_id = str((pair or {}).get("id") or "")
+            if record.get("cleanupProtection") and (
+                pair is None or current_id != registered_id
+                or not isinstance(observation, dict) or observation.get("state") != "invalid"
+            ):
+                record.pop("cleanupProtection", None)
+                changed = True
             if registered_id and current_id and registered_id != current_id:
                 # The old auto-created ID does not grant ownership of a
                 # replacement card. End its cleanup window without adopting
@@ -1075,6 +1097,7 @@ def astro_delete_rearm_status() -> dict[str, Any]:
 def astro_cleanup_status() -> dict[str, Any]:
     invalid = 0
     cooldown = 0
+    protected_cards: list[dict[str, Any]] = []
     coverage = {"registeredRecords": 0, "legacyProtected": 0, "submittedOnlyProtected": 0, "completeReadbackSnapshots": 0, "inactiveDirectionOnlySnapshots": 0}
     unreadable_fields: set[str] = set()
     now = _utc_now()
@@ -1084,6 +1107,13 @@ def astro_cleanup_status() -> dict[str, Any]:
             if not isinstance(record, dict):
                 continue
             coverage["registeredRecords"] += 1
+            protection = record.get("cleanupProtection")
+            if isinstance(protection, dict):
+                observed = _parse_iso(protection.get("observedAt"))
+                if (observed is not None and 0 <= (now - observed).total_seconds() <= 600
+                        and not record.get("systemDeletedAt") and not record.get("cleanupSupersededById")
+                        and str(protection.get("reason") or "").startswith("submitted_config_not_readable:")):
+                    protected_cards.append({**{key: record.get(key) for key in ("name", "type", "buyEx", "sellEx")}, **protection})
             if record.get("createdPairSnapshotVersion") != AUTO_CARD_SNAPSHOT_VERSION:
                 coverage["legacyProtected"] += 1
             elif set(record.get("submittedOnlyConfigFields") or []) - set(record.get("inactiveUnreadableConfigFields") or []):
@@ -1104,8 +1134,10 @@ def astro_cleanup_status() -> dict[str, Any]:
         "systemDeleteRearmBufferPctPoints": astro_cleanup_rearm_buffer_pct_points(),
         "invalidTrackingCount": invalid,
         "cooldownCount": cooldown,
+        "recentProtectedCards": sorted(protected_cards, key=lambda item: item["observedAt"], reverse=True),
+        "protectionObservationSeconds": 600,
         "configSnapshotCoverage": {**coverage, "unreadableSubmittedFields": sorted(unreadable_fields), "scope": "registered_history_records"},
-        "safetyRule": "仅本地自动创建、暂停、从未成交且配置未修改的卡片；旧快照或不可回读的有效配置保守保护。仅当原始和当前priceAlert明确为空时忽略不可回读的仅上涨开关；删除前再次核对状态",
+        "safetyRule": "仅本地自动创建、暂停、从未成交且配置未修改的卡片；旧快照或不可回读的有效配置保守保护。仅当原始和当前价格报警明确关闭（空字符串或null，字段缺失不算）时忽略不可回读的仅上涨开关；删除前再次核对状态",
     }
 
 

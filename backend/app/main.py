@@ -61,6 +61,7 @@ from app.system_runtime_log import (
     uninstall_global_exception_hooks,
 )
 from app.dex_history import router as dex_history_router
+from app.aster_funding_rank import router as aster_funding_rank_router, start_scheduler as start_aster_funding_rank_scheduler, stop_scheduler as stop_aster_funding_rank_scheduler
 from app.funding_prediction_review import (
     funding_formation_watch_overview,
     funding_prediction_review_overview,
@@ -297,6 +298,7 @@ app.include_router(decision_review_router)
 app.include_router(decision_flow_router)
 app.include_router(system_runtime_log_router)
 app.include_router(dex_history_router)
+app.include_router(aster_funding_rank_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -500,6 +502,7 @@ def on_startup() -> None:
     from app import transfer_watch_bridge
     transfer_watch_bridge.start()
     start_astro_spread_scanner()
+    start_aster_funding_rank_scheduler()
     if not funding_cloud_enabled():
         start_funding_prediction_scheduler()
     start_exchange_ann_scheduler()
@@ -513,6 +516,7 @@ def on_shutdown() -> None:
     from app import transfer_watch_bridge
     transfer_watch_bridge.stop()
     stop_astro_spread_scanner()
+    stop_aster_funding_rank_scheduler()
     stop_funding_prediction_scheduler()
     stop_exchange_ann_scheduler()
     stop_exchange_opportunity_scheduler()
@@ -871,14 +875,14 @@ def run_scheduled_fs_scan() -> None:
 
 def start_exchange_ann_scheduler() -> None:
     global _exchange_ann_scheduler_thread
-    if os.environ.get("EXCHANGE_ANN_AUTO_PUSH", "1") != "1":
+    if os.environ.get("EXCHANGE_ANN_AUTO_SCAN", os.environ.get("EXCHANGE_ANN_AUTO_PUSH", "1")) != "1":
         return
     if _exchange_ann_scheduler_thread and _exchange_ann_scheduler_thread.is_alive():
         return
     _exchange_ann_scheduler_stop.clear()
     _exchange_ann_scheduler_thread = threading.Thread(
         target=exchange_ann_scheduler_loop,
-        name="exchange-announcement-push-scheduler",
+        name="exchange-announcement-scan-scheduler",
         daemon=True,
     )
     _exchange_ann_scheduler_thread.start()
@@ -1007,6 +1011,7 @@ def system_status(db: Session = Depends(get_db)) -> dict[str, Any]:
         "market_review": {"status": "manual_only"},
         "exchange_announcements": {
             "status": "ok",
+            "auto_scan": os.environ.get("EXCHANGE_ANN_AUTO_SCAN", os.environ.get("EXCHANGE_ANN_AUTO_PUSH", "1")) == "1",
             "auto_push": os.environ.get("EXCHANGE_ANN_AUTO_PUSH", "1") == "1",
             "interval_seconds": exchange_push_interval_seconds(),
         },
@@ -2443,7 +2448,7 @@ def fs_astro_auto_card_status(check_connection: bool = False) -> dict[str, Any]:
 
 @app.post("/api/fs/astro-auto-card/submissions/resolve")
 def resolve_astro_submission(payload: dict[str, Any]) -> dict[str, Any]:
-    from app.astro_card_registry import resolve_reviewed_submission, pending_astro_submission_status
+    from app.astro_card_registry import resolve_reviewed_submission, pending_astro_submission_status, validate_submission_review
     from app.astro_sdk import AstroSdkClient, astro_sdk_config, _replace_existing_route_snapshot
     if payload.get("confirmNotExecuted") is not True:
         raise HTTPException(status_code=400, detail="只有核实未执行后才能解除锁；卡片列表缺失不算证明")
@@ -2454,6 +2459,11 @@ def resolve_astro_submission(payload: dict[str, Any]) -> dict[str, Any]:
     target = next((item for item in pending_astro_submission_status()["items"] if item.get("submissionId") == submission_id), None)
     if not target or target.get("state") != "needs_review":
         raise HTTPException(status_code=409, detail="提交状态已变化或尚在核对，请刷新")
+    reviewed_route = payload.get("reviewedRoute")
+    try:
+        validate_submission_review(target, reviewed_route)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         # A failed read must never turn into permission to recreate a card.
         with AstroSdkClient(astro_sdk_config()) as client:
@@ -2464,10 +2474,10 @@ def resolve_astro_submission(payload: dict[str, Any]) -> dict[str, Any]:
     if any(all(str(pair.get(k, "")).lower() == str(target.get(k, "")).lower() for k in ("name", "type", "buyEx", "sellEx")) for pair in pairs):
         raise HTTPException(status_code=409, detail="已发现同路线卡片，不能结案为未执行；请刷新核对")
     try:
-        result = resolve_reviewed_submission(submission_id, evidence)
+        result = resolve_reviewed_submission(submission_id, evidence, reviewed_route)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    append_system_runtime_event("astro_submission_manually_resolved", module="astro_sdk", message="已凭证据核实提交未执行，结束该次提交", details={**result, "evidence": evidence})
+    append_system_runtime_event("astro_submission_manually_resolved", level="info", module="astro_sdk", message="操作人已确认提交未执行，结束该次提交", details={**result, "reviewedRoute": reviewed_route, "evidence": evidence})
     return {"result": result, "pendingSubmissions": pending_astro_submission_status()}
 
 
@@ -2540,6 +2550,8 @@ def update_fs_astro_spread_subscriptions(payload: dict[str, Any]) -> dict[str, A
             delete_pullback_pct_points=payload.get("deletePullbackPctPoints"),
             ff_min_open_spread_pct=payload.get("ffMinOpenSpreadPct"),
             ff_bybit_sell_exception_enabled=payload.get("ffBybitSellExceptionEnabled"),
+            ff_bybit_sell_exception_min_open_spread_pct=payload.get("ffBybitSellExceptionMinOpenSpreadPct"),
+            scan_interval_seconds=payload.get("scanIntervalSeconds"),
             sf_min_open_spread_pct=payload.get("sfMinOpenSpreadPct"),
             sf_okxdex_min_open_spread_pct=payload.get("sfOkxdexMinOpenSpreadPct"),
             sf_pancakeswap_v3_min_open_spread_pct=payload.get("sfPancakeswapV3MinOpenSpreadPct"),

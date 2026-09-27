@@ -12,10 +12,12 @@ LOG_DIR="$HOME/Library/Logs/stock-review-mac"
 LABEL="com.stock-review-mac.autostart"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 RESTART=1
+CONFIG_MODE=preserve
 
 for argument in "$@"; do
   case "$argument" in
     --no-restart) RESTART=0 ;;
+    --update-runtime-config) CONFIG_MODE=replace ;;
     --install-launchagent) ;;
     *) echo "未知参数：$argument" >&2; exit 2 ;;
   esac
@@ -91,7 +93,7 @@ install -m 755 "$SOURCE_ROOT/launcher/supervisor.py" "$LAUNCHER_ROOT/supervisor.
 install -m 755 "$SOURCE_ROOT/launcher/astro_quote_bridge.py" "$LAUNCHER_ROOT/astro_quote_bridge.py"
 install -m 755 "$SOURCE_ROOT/launcher/pulse_ssh_bridge.py" "$LAUNCHER_ROOT/pulse_ssh_bridge.py"
 install -m 755 "$SOURCE_ROOT/frontend-static-server.py" "$LAUNCHER_ROOT/frontend_static_server.py"
-install -m 600 "$RUNTIME_ROOT/.env" "$LAUNCHER_ROOT/runtime.env"
+bash "$SOURCE_ROOT/scripts/install_runtime_env.sh" "$RUNTIME_ROOT/.env" "$LAUNCHER_ROOT/runtime.env" "$CONFIG_MODE"
 chmod 600 "$LAUNCHER_ROOT/runtime.env"
 rm -f "$LAUNCHER_ROOT/start.sh"
 rsync -a --delete "$SOURCE_ROOT/frontend/dist/" "$LAUNCHER_ROOT/frontend-dist/"
@@ -206,7 +208,7 @@ if [ "$RESTART" -eq 1 ]; then
   launchctl kickstart -k "gui/$(id -u)/$LABEL"
   job_was_stopped=0
 
-python3 - "$RUNTIME_ROOT/.env" <<'PY'
+python3 - "$LAUNCHER_ROOT/runtime.env" <<'PY'
 from pathlib import Path
 import sys
 import time

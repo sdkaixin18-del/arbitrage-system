@@ -35,6 +35,10 @@ def isolate_sdk_registry(monkeypatch, tmp_path):
     from app import astro_sdk_budget
     monkeypatch.setattr(astro_sdk_budget, "_budgets", {})
     monkeypatch.setenv("ASTRO_AUTO_CARD_REGISTRY_FILE", str(tmp_path / "sdk-registry.json"))
+    settings = tmp_path / "settings.json"
+    settings.write_text("{}")
+    monkeypatch.setenv("ASTRO_SPREAD_SUBSCRIPTIONS_FILE", str(settings))
+    monkeypatch.setenv("ASTRO_CHAIN_LABEL_PUBLISH_ENABLED", "0")
     with astro_sdk_module._route_dedupe_lock:
         astro_sdk_module._pending_submission_routes.clear()
 
@@ -839,6 +843,20 @@ def test_live_submit_guard_closes_block_update_race_before_add(monkeypatch) -> N
             ],
         },
     ) in logged
+
+
+def test_settings_corruption_during_quote_blocks_last_second_add(monkeypatch):
+    from app.astro_settings import settings_path
+    pair = build_astro_spread_pair({"symbol": "ABC", "type": "FF", "buyExchange": "binance",
+                                    "sellExchange": "gate", "openSpreadPct": 1.2}, config())
+    class Client:
+        def list_pairs(self): return []
+        def add_pair(self, pair): pytest.fail("damaged rules must block add")
+    def validate(pair, config):
+        settings_path().write_text('{')
+        return pair, fresh_quote_report()
+    monkeypatch.setattr(astro_sdk_module, '_log', lambda *a, **kw: None)
+    assert not astro_sdk_module._sync_candidate_pair(Client(), pair, config(), validate, set())
     assert not astro_sdk_module._sync_lock.locked()
 
 

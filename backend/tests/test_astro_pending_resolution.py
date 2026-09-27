@@ -9,6 +9,9 @@ from test_astro_sdk import config, cleanup_fixture
 @pytest.fixture
 def isolated(monkeypatch, tmp_path):
     monkeypatch.setenv('ASTRO_AUTO_CARD_REGISTRY_FILE', str(tmp_path/'registry.json'))
+    (tmp_path / 'settings.json').write_text('{}')
+    monkeypatch.setenv('ASTRO_SPREAD_SUBSCRIPTIONS_FILE', str(tmp_path / 'settings.json'))
+    monkeypatch.setenv('ASTRO_CHAIN_LABEL_PUBLISH_ENABLED', '0')
     clock=[datetime(2026,9,8,tzinfo=timezone.utc)]
     monkeypatch.setattr(r,'_utc_now',lambda:clock[0])
     monkeypatch.setattr(s,'_log',lambda *a,**kw:None)
@@ -110,8 +113,83 @@ def test_manual_resolution_requires_review_state_and_keeps_evidence(isolated):
     isolated[0]+=timedelta(seconds=66);r.pending_submission_checks_due()
     with pytest.raises(ValueError):r.resolve_reviewed_submission(submission,'missing')
     evidence='Server log: core has no client connected; request was not executed.'
-    result=r.resolve_reviewed_submission(submission,evidence)
+    result=r.resolve_reviewed_submission(submission,evidence,'ABC FF aster/gate')
     assert result['state']=='failed_not_executed'
     state=r.pending_astro_submission_status()
     assert state['count']==0 and evidence in state['recentResolutions'][0]['resolution']
     with pytest.raises(ValueError):r.resolve_reviewed_submission(submission,evidence)
+
+
+@pytest.mark.parametrize('reviewed_route', [None, '', 'STONK SF gate/bybit', 'ABC FF gate/aster', 'ABC SF aster/gate', 'XYZ FF aster/gate'])
+def test_wrong_or_missing_review_route_keeps_lock(isolated, reviewed_route):
+    r.record_pending_astro_submission(pair(), 'outcome_unknown')
+    isolated[0] += timedelta(seconds=66)
+    r.pending_submission_checks_due()
+    submission = r.pending_astro_submission_status()['items'][0]['submissionId']
+    with pytest.raises(ValueError):
+        r.resolve_reviewed_submission(submission, 'Server records confirm this request was not executed.', reviewed_route)
+    assert r.pending_astro_submission_status()['items'][0]['submissionId'] == submission
+
+
+@pytest.mark.parametrize('mode', ['wrong_route', 'old_payload', 'read_error', 'existing', 'success'])
+def test_resolution_api_fail_closed_and_info_log(isolated, monkeypatch, mode):
+    from app import main
+    from fastapi import HTTPException
+    r.record_pending_astro_submission(pair(), 'outcome_unknown')
+    isolated[0] += timedelta(seconds=66)
+    r.pending_submission_checks_due()
+    submission = r.pending_astro_submission_status()['items'][0]['submissionId']
+    reads, logs = [], []
+    class Client:
+        def __init__(self, *_args): pass
+        def __enter__(self): return self
+        def __exit__(self, *_args): pass
+        def list_pairs(self, **_kwargs):
+            reads.append(True)
+            if mode == 'read_error': raise TimeoutError()
+            return [{**pair(), 'id': 'existing'}] if mode == 'existing' else []
+    monkeypatch.setattr(s, 'AstroSdkClient', Client)
+    monkeypatch.setattr(main, 'append_system_runtime_event', lambda *args, **kwargs: logs.append((args, kwargs)))
+    payload = {'submissionId': submission, 'evidence': 'Server records confirm this request was not executed.',
+               'confirmNotExecuted': True, 'reviewedRoute': 'ABC FF aster/gate'}
+    if mode == 'wrong_route': payload['reviewedRoute'] = 'STONK SF gate/bybit'
+    if mode == 'old_payload': payload.pop('reviewedRoute')
+    if mode == 'success':
+        result = main.resolve_astro_submission(payload)
+        assert result['result']['state'] == 'failed_not_executed'
+        assert logs[0][1]['level'] == 'info'
+        assert logs[0][1]['details']['reviewedRoute'] == payload['reviewedRoute']
+    else:
+        with pytest.raises(HTTPException) as exc:
+            main.resolve_astro_submission(payload)
+        assert exc.value.status_code == {'wrong_route': 400, 'old_payload': 400, 'read_error': 503, 'existing': 409}[mode]
+        assert not logs
+        if mode != 'existing':
+            assert r.pending_astro_submission_status()['count'] == 1
+        else:
+            assert r.pending_astro_submission_status()['recentResolutions'][0]['state'] == 'confirmed'
+        if mode in ('wrong_route', 'old_payload'): assert not reads
+
+
+@pytest.mark.parametrize('stage', ['prepare_creation', 'submit_card'])
+def test_empty_error_is_logged_with_stage_and_submission_state(isolated, monkeypatch, stage):
+    candidate, _ = cleanup_fixture()
+    logs = []
+    class Client:
+        def __init__(self, *_args): pass
+        def __enter__(self): return self
+        def __exit__(self, *_args): pass
+        def list_pairs(self): return []
+        def prepare_creation(self, **_kwargs):
+            if stage == 'prepare_creation': raise TimeoutError()
+            return 0
+        def add_pair(self, _pair): raise httpx.ReadTimeout('')
+    monkeypatch.setattr(s, 'AstroSdkClient', Client)
+    monkeypatch.setattr(s, '_log', lambda event, **kwargs: logs.append((event, kwargs)))
+    s._sync_lock.acquire()
+    s._sync_pair_worker([candidate], config())
+    errors = [data['details'] for event, data in logs if event == 'astro_card_sync_item_failed']
+    assert len(errors) == 1
+    assert errors[0]['error'] == errors[0]['errorType'] == ('TimeoutError' if stage == 'prepare_creation' else 'ReadTimeout')
+    assert errors[0]['stage'] == stage
+    assert errors[0]['submissionState'] == ('not_submitted' if stage == 'prepare_creation' else 'outcome_unknown')

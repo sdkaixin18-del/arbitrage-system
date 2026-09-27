@@ -1629,6 +1629,8 @@ export interface CryptoFsSignalsResponse {
       message: string;
     };
     automaticCleanup?: {
+      recentProtectedCards?: {name: string; type: string; buyEx: string; sellEx: string; cardId: string; reason: string; observedAt: string}[];
+      protectionObservationSeconds?: number;
       enabled: boolean;
       graceSeconds: number;
       continuousInvalidSeconds: number;
@@ -1643,6 +1645,7 @@ export interface CryptoFsSignalsResponse {
       };
     };
     spreadScanner?: {
+      settingsHealth?: { state: string; newCardsAllowed: boolean; message?: string };
       newsPolicy?: {
         running: boolean; intervalSeconds: number; lastReadAt: string | null; sourceUpdatedAt: string | null;
         lastError: string | null; storageError: string | null; blockCount: number; unresolvedNoticeCount: number;

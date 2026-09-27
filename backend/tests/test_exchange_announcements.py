@@ -28,6 +28,7 @@ from app.exchange_announcements import (
     BEIJING_TZ,
     MARKET_STATUS_EXCHANGES,
     build_item,
+    binance_migration_delistings,
     build_opportunity_snapshot,
     build_exchange_announcement_push_body,
     bybit_stock_symbols_from_instruments,
@@ -106,6 +107,33 @@ def announcement_item(event_at: datetime) -> dict[str, object]:
 
 
 class ExchangeAnnouncementPushBodyTest(unittest.TestCase):
+    def test_binance_token_merge_uses_futures_settlement_not_spot_or_opening_cutoff(self) -> None:
+        def block(tag: str, text: str) -> dict[str, object]:
+            return {"node": "element", "tag": tag, "child": [{"node": "text", "text": text}]}
+
+        article = {
+            "code": "example",
+            "title": "Binance Will Support the Stargate Finance (STG) Token Merge to LayerZero (ZRO)",
+            "releaseDate": 1789720201456,
+        }
+        detail = {"body": json.dumps({"node": "root", "child": [
+            block("h3", "Spot"),
+            {"tag": "ul", "child": [block("li", "At 2026-10-06 03:00 (UTC), STG/USDT spot trading will be removed.")]},
+            block("h3", "Futures"),
+            {"tag": "ul", "child": [
+                block("li", "Starting from 2026-09-24 08:30 (UTC), new positions are not allowed."),
+                block("li", "At 2026-09-24 09:00 (UTC), Binance Futures will close all positions and settle the contracts. The contracts will be removed after settlement. The STGUSDT symbol is affected."),
+            ]},
+            block("h3", "Margin"),
+            {"tag": "ul", "child": [block("li", "At 2026-09-24 10:00 (UTC), STG margin will be removed.")]},
+        ]})}
+        items = binance_migration_delistings(article, detail)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["action"], "delisting")
+        self.assertEqual(items[0]["market_type"], "contract")
+        self.assertEqual(items[0]["symbols"], ["STG"])
+        self.assertEqual(items[0]["event_at"], "2026-09-24T17:00:00+08:00")
+
     def test_okx_ssr_payload_recovers_current_articles_and_real_publish_time(self) -> None:
         payload = {
             "appContext": {

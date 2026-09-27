@@ -105,6 +105,7 @@ def _default_okxdex_safety_gates_enabled(monkeypatch: pytest.MonkeyPatch, tmp_pa
 
     # Never inherit the running site's saved thresholds/identity switches.
     monkeypatch.setenv("ASTRO_SPREAD_SUBSCRIPTIONS_FILE", str(tmp_path / "isolated-scanner-settings.json"))
+    (tmp_path / "isolated-scanner-settings.json").write_text("{}")
 
     # These regressions exercise the established transport/legacy rule path.
     # The enabled economic policy is covered separately with complete plan

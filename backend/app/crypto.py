@@ -6766,12 +6766,14 @@ def _compute_crypto_fs_signals_overview(
     harmonize_fs_transfer_statuses(signals)
     fs_auto_card_summary: dict[str, Any] | None = None
     if schedule_auto_cards:
+        from app.astro_spread_scanner import astro_spread_pair_submit_guard
         resolved_astro = astro_sdk_config()
         fs_pairs, fs_build_summary = build_astro_fs_borrow_pairs(signals, resolved_astro)
         sync_status = schedule_astro_pairs(
             fs_pairs,
             resolved_astro,
             revalidator=revalidate_astro_fs_borrow_pair,
+            submit_guard=astro_spread_pair_submit_guard,
         )
         fs_auto_card_summary = {
             **fs_build_summary,

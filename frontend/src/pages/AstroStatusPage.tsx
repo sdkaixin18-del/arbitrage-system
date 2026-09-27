@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ExportOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Input, Modal, Space, Table, Tag, Typography, message } from "antd";
+import { Alert, Button, Checkbox, Input, Modal, Space, Table, Tabs, Tag, Tooltip, Typography, message } from "antd";
 import { Link } from "react-router-dom";
 import { cryptoApi as api } from "../api/crypto";
 
@@ -17,7 +17,7 @@ type RouteStatus = {
   mode: string; category?: string | null; error?: string | null;
   lastReason?: string; evidenceFresh: boolean;
 };
-const routeName = (row: RouteStatus) => `${row.symbol} ${row.type} · ${row.buyExchange}/${row.sellExchange}`;
+const routeName = (row: RouteStatus) => `${row.symbol} ${row.type} · ${row.buyExchange} → ${row.sellExchange}`;
 const routeReason = (row: RouteStatus, deadline: number) => {
   const reasons: Record<string, string> = {
     stale_direct_quote: "盘口报价过期",
@@ -62,13 +62,20 @@ const routeAction = (row: RouteStatus, cloudReady: boolean) => {
 
 export default function AstroStatusPage() {
   const queryClient = useQueryClient();
+  const [routeTab, setRouteTab] = useState("hot");
   const [reviewTarget, setReviewTarget] = useState<{submissionId: string; route: string} | null>(null);
   const [reviewEvidence, setReviewEvidence] = useState("");
+  const [reviewedRoute, setReviewedRoute] = useState("");
+  const [confirmNotExecuted, setConfirmNotExecuted] = useState(false);
+  const resetReview = () => { setReviewTarget(null); setReviewEvidence(""); setReviewedRoute(""); setConfirmNotExecuted(false); };
   const statusQuery = useQuery({
     queryKey: ["astro-auto-card-status"], queryFn: () => api.astroAutoCardStatus(),
     refetchInterval: 2000, retry: false
   });
   const status = statusQuery.data;
+  const reviewCurrent = status?.pendingSubmissions?.items.some(item => item.submissionId === reviewTarget?.submissionId && item.state === "needs_review") === true;
+  const reviewAllowed = reviewCurrent && !statusQuery.isError && confirmNotExecuted && reviewEvidence.trim().length >= 10
+    && reviewEvidence.trim().length <= 1000 && reviewedRoute.trim().toLowerCase() === reviewTarget?.route.toLowerCase();
   const scanner = status?.spreadScanner;
   const news = scanner?.newsPolicy;
   const degraded = scanner?.apiDegradedMode;
@@ -92,7 +99,7 @@ export default function AstroStatusPage() {
     mutationFn: api.resolveAstroSubmissionNotExecuted,
     onSuccess: () => {
       message.success("已核实本次没有创建卡片，防重复锁已解除");
-      setReviewTarget(null); setReviewEvidence("");
+      resetReview();
       queryClient.invalidateQueries({queryKey:["astro-auto-card-status"]});
     },
     onError: error => message.error(String(error)),
@@ -100,33 +107,23 @@ export default function AstroStatusPage() {
   return (
     <div className="astro-rules-page astro-status-page">
       <header className="astro-page-toolbar">
-        <div><Typography.Title level={3}>运行状态</Typography.Title><Typography.Text type="secondary">每 2 秒更新；展示实际运行、复核和建卡证据。</Typography.Text></div>
-        <Button icon={<ReloadOutlined />} loading={statusQuery.isFetching} onClick={() => statusQuery.refetch()}>刷新状态</Button>
+        <div><Typography.Title level={3}>运行状态</Typography.Title><Typography.Text type="secondary">{statusQuery.isError ? "刷新失败 · 以下为上次数据" : statusQuery.dataUpdatedAt ? `更新于 ${formatTime(new Date(statusQuery.dataUpdatedAt).toISOString())}` : "正在读取状态"}</Typography.Text></div>
+        <Tooltip title="刷新状态"><Button aria-label="刷新状态" icon={<ReloadOutlined />} onClick={() => statusQuery.refetch()} /></Tooltip>
       </header>
-      <section className="astro-status-summary" aria-label="运行概览">
-        <div><span>行情扫描</span><strong>{!scanner ? "读取中" : scanner.running ? "运行中" : scanner.enabled ? "等待运行" : "已关闭"}</strong><small>最近扫描 {formatTime(scanner?.lastScanAt)}</small></div>
-        <div><span>自动建卡</span><strong>{!status ? "读取中" : !status.enabled ? "已关闭" : !status.configured ? "待配置" : status.dryRun ? "试运行" : "已启用"}</strong><small>{status?.message || "等待读取建卡状态"}</small></div>
+      <section className={`astro-status-summary ${statusQuery.isError ? "is-stale" : ""}`} aria-label="运行概览">
+        <div><span>行情扫描</span><strong>{!scanner ? "读取中" : statusQuery.isError ? "上次：扫描状态" : scanner.running ? "运行中" : scanner.enabled ? "等待运行" : "已关闭"}</strong><small>最近扫描 {formatTime(scanner?.lastScanAt)}</small></div>
+        <div><span>自动建卡</span><strong>{!status ? "读取中" : statusQuery.isError ? "上次：建卡状态" : !status.enabled ? "已关闭" : !status.configured ? "待配置" : status.dryRun ? "试运行" : "已启用"}</strong><small>{statusQuery.isError ? "等待状态恢复" : status?.message || "等待读取建卡状态"}</small></div>
         <div><span>新卡状态</span><strong>{!status ? "—" : status.defaultPaused ? "默认暂停" : "默认运行"}</strong><small>单笔 {formatMetric(status?.defaultMinNotionalUsdt, 0)}–{formatMetric(status?.defaultMaxNotionalUsdt, 0)} USDT</small></div>
         <div><span>本轮候选 / 已确认</span><strong>{scanner?.candidateCount ?? "—"} / {scanner?.confirmedCount ?? "—"}</strong><small>确认候选不等于已建卡或已成交</small></div>
       </section>
-      {news ? <details className="astro-rules-card">
-        <summary style={{ cursor: "pointer" }}>公告联动 · {news.blockCount} 项下架限制 · {news.listingSymbols.length} 个公告预建币种
-          {news.lastError || news.storageError || news.cardCheckError || news.listingScheduleError || news.cardChecks.some(row => row.status === "pending") ? " · 待处理" : ""}
-        </summary>
-        <p>每 {news.intervalSeconds} 秒集中读取新闻；下架按币种、交易所和现货／合约限制新开仓，已有卡片保留平仓设置。上架公告可提前创建暂停卡：双方已公告，或一方已交易＋另一方已公告待上市。不要求开市、价差、资金费或盘口达标。</p>
-        <p>新闻源更新：{formatTime(news.sourceUpdatedAt)} · 卡片核对：{formatTime(news.lastCardCheckAt)}</p>
-        {news.lastError || news.storageError || news.cardCheckError ? <Alert type="warning" showIcon message="公告联动部分未完成" description={`新闻：${news.lastError || "正常"}；持久化：${news.storageError || "正常"}；卡片核对：${news.cardCheckError || "正常"}。已知下架限制继续保留。`} /> : null}
-        {news.listingSymbols.length ? <p>公告预建：{news.listingSymbols.join("、")}</p> : null}
-        <p>预建卡采用已保存的开／平仓阈值作为初始设置，不代表当前可成交差价；不会自动启动，也不会因尚无行情或差价不达标而自动清理。</p>
-        {news.listingScheduleError ? <Alert type="warning" message={`公告预建暂未完成：${news.listingScheduleError}`} /> : null}
-        {news.listingRoutes?.map(row => <div key={`${row.symbol}:${row.type}:${row.buyExchange}:${row.sellExchange}`}>
-          <Tag color="blue">{row.category === "both_announced" ? "双方已公告" : "已交易＋已公告"}</Tag>
-          {row.symbol} {row.type} · {row.buyExchange}/{row.sellExchange} · {({ existing: "卡片已存在", syncing: "提交处理中", queued: "排队中", submission_pending: "提交待确认", waiting_submission: "等待提交" } as Record<string, string>)[row.state] || row.state}
-        </div>)}
-        {news.unresolvedNoticeCount ? <p>另有 {news.unresolvedNoticeCount} 条公告待解析，尚未确认具体限制范围。</p> : null}
-        <Space wrap>{news.blocks.map(row => <a key={`${row.symbol}:${row.exchange}:${row.market}`} href={row.sourceUrl} target="_blank" rel="noreferrer"><Tag color="red">{row.symbol} · {row.exchange} · {row.market === "spot" ? "现货" : "合约"} 禁开</Tag></a>)}</Space>
-        {news.cardChecks.map(row => <div key={row.id}>{row.symbol} {row.type} · {row.buyExchange}/{row.sellExchange}：{row.status === "confirmed" ? "已复读确认禁止开仓" : row.status === "removed" ? "卡片已不存在" : row.status === "route_changed" ? "路线已改变，等待下轮核对" : `禁止开仓待确认（${row.error || "等待核对"}）`}</div>)}
-      </details> : null}
+
+      {status && !statusQuery.isError && !scanner?.lastError && scanner?.settingsHealth?.newCardsAllowed !== false && !status.pendingSubmissionCount && !activeCount && !status.automaticCleanup?.recentProtectedCards?.length
+        ? <div className="astro-quiet-status">当前无待核对提交、复核受阻或清理保护记录</div> : null}
+      {news && (news.lastError || news.storageError || news.cardCheckError || news.listingScheduleError || news.cardChecks.some(row => row.status === "pending"))
+        ? <Alert type="warning" showIcon message="公告联动有待处理事项" description={<a href="#astro-news-policy">查看公告联动</a>} /> : null}
+      {scanner?.settingsHealth?.newCardsAllowed === false ? (
+        <Alert type="error" showIcon message="规则文件读取失败，已暂停新建卡" description="已有卡片不受影响。请检查或恢复已保存的规则文件，恢复后系统会重新核对规则。" />
+      ) : null}
       {statusQuery.isError || scanner?.lastError ? (
         <Alert type="error" showIcon message="行情扫描状态异常" description={scanner?.lastError ?? String(statusQuery.error)} />
       ) : null}
@@ -144,7 +141,7 @@ export default function AstroStatusPage() {
                 {astroAdmin ? <Button href={astroAdmin} target="_blank" icon={<ExportOutlined />}>打开 Astro 卡片列表</Button> : null}
                 <Button loading={recheckSubmission.isPending} disabled={!item.submissionId}
                   onClick={() => item.submissionId && recheckSubmission.mutate(item.submissionId)}>立即重新读取 Astro</Button>
-                <Button danger disabled={!item.submissionId} onClick={() => item.submissionId && setReviewTarget({submissionId:item.submissionId,route:`${item.name} ${item.type} ${item.buyEx}/${item.sellEx}`})}>确认没有创建</Button>
+                <Button danger disabled={!item.submissionId || resolveSubmission.isPending} onClick={() => {resetReview(); if (item.submissionId) setReviewTarget({submissionId:item.submissionId,route:`${item.name} ${item.type} ${item.buyEx}/${item.sellEx}`});}}>确认没有创建</Button>
               </Space>
             </> : <div>系统仍会按计划自动读取，无需手工处理。</div>}
             <details><summary style={{ cursor: "pointer" }}>提交详情</summary>
@@ -155,22 +152,29 @@ export default function AstroStatusPage() {
           </div>)}
         </Space>} /> : null}
 
-      <Modal title="确认本次没有创建卡片" open={!!reviewTarget} okText="核实无卡，解除防重复锁" okButtonProps={{ danger:true, disabled:reviewEvidence.trim().length < 10 }}
-        confirmLoading={resolveSubmission.isPending} onCancel={() => {setReviewTarget(null);setReviewEvidence("");}}
-        onOk={() => reviewTarget && resolveSubmission.mutate({submissionId:reviewTarget.submissionId,evidence:reviewEvidence.trim()})}>
+      <Modal title="确认本次没有创建卡片" open={!!reviewTarget} okText="确认未执行，解除防重复锁" okButtonProps={{ danger:true, disabled:!reviewAllowed }}
+        confirmLoading={resolveSubmission.isPending} onCancel={resetReview}
+        onOk={() => reviewTarget && reviewAllowed && resolveSubmission.mutate({submissionId:reviewTarget.submissionId,evidence:reviewEvidence.trim(),reviewedRoute:reviewedRoute.trim(),confirmNotExecuted})}>
         <Typography.Paragraph><strong>{reviewTarget?.route}</strong></Typography.Paragraph>
-        <Alert type="warning" showIcon message="只有你已经打开 Astro 卡片列表并确认没有这张路线时才能解除锁。单次读取失败或暂时没显示，不算未创建证据。" />
-        <Typography.Paragraph style={{ marginTop: 12, marginBottom: 6 }}>填写你核对的内容，例如：Astro 卡片列表搜索 STONK，核对 SF、gate/bybit，提交时间之后仍无同路线卡片。</Typography.Paragraph>
-        <Input.TextArea rows={4} value={reviewEvidence} onChange={event => setReviewEvidence(event.target.value)} placeholder="至少10个字，写明搜索币种、类型、交易所和核对结果" />
+        <Alert type="warning" showIcon message="列表里没找到卡片，不等于本次请求未执行。未能确认时请保留防重复锁。" />
+        <Typography.Paragraph style={{ marginTop: 12, marginBottom: 6 }}>核对路线</Typography.Paragraph>
+        <Input aria-label="核对路线" value={reviewedRoute} onChange={event => setReviewedRoute(event.target.value)} placeholder={reviewTarget?.route} />
+        <Typography.Paragraph style={{ marginTop: 12, marginBottom: 6 }}>未执行依据（核对时间、记录来源及结果）</Typography.Paragraph>
+        <Input.TextArea aria-label="未执行依据" rows={4} maxLength={1000} value={reviewEvidence} onChange={event => setReviewEvidence(event.target.value)} placeholder="10至1000字" />
+        <Checkbox checked={confirmNotExecuted} onChange={event => setConfirmNotExecuted(event.target.checked)}>已核实此路线、此提交未执行，不仅是列表未显示</Checkbox>
+        {!reviewCurrent ? <Alert type="warning" message="提交状态已变化，请关闭后刷新核对" /> : null}
       </Modal>
 
-      {(status?.pendingSubmissions?.recentResolutions?.length ?? 0) > 0 ? <details className="astro-rules-card">
-        <summary style={{ cursor: "pointer" }}>最近已结束的提交</summary>
-        {status?.pendingSubmissions?.recentResolutions?.map(item => <div key={item.submissionId ?? `${item.resolvedAt}:${item.name}`} style={{ marginTop: 8 }}>
-          <Tag color={item.state === "confirmed" ? "green" : "default"}>{item.state === "confirmed" ? "已确认成功" : "未执行，提交已结束"}</Tag>
-          {item.name} {item.type} {item.buyEx}/{item.sellEx} · {formatTime(item.resolvedAt)} · {item.resolution}
+      {(status?.automaticCleanup?.recentProtectedCards?.length ?? 0) > 0 ? <section aria-label="自动清理保护">
+        <Typography.Title level={4}>自动清理保护 · 需人工核对</Typography.Title>
+        <Typography.Paragraph type="secondary">以下为最近10分钟实际遇到的配置回读不完整记录，卡片未被自动删除；不代表历史登记卡片总数。</Typography.Paragraph>
+        {status?.automaticCleanup?.recentProtectedCards?.map(item => <div key={item.cardId} style={{ overflowWrap: "anywhere" }}>
+          <Tag color="orange">无法自动清理</Tag>{item.name} {item.type} · {item.buyEx}/{item.sellEx}
+          <div>暂不自动删除：无法读取{item.reason.split(":").slice(1).join(":").split(",").map(field => field === "priceAlertOnlyRise" ? "“价格报警仅上涨”设置" : field).join("、")} · 最近核对 {formatTime(item.observedAt)} · 卡片 {item.cardId}</div>
         </div>)}
-      </details> : null}
+      </section> : null}
+
+
 
 
       {activeCount > 0 ? (
@@ -191,43 +195,48 @@ export default function AstroStatusPage() {
         />
       ) : null}
 
-      {scanner?.apiDegradedMode?.routeControl ? (
-        <section className="astro-rules-card" id="astro-route-status">
-          <div className="astro-rules-section-head"><strong>复核通道与提醒</strong>
-            <Typography.Text type="secondary">
-              云端执行 {scanner.apiDegradedMode.routeControl.cloudQueue.active}/{scanner.apiDegradedMode.routeControl.cloudQueue.maxActive} · 排队 {scanner.apiDegradedMode.routeControl.cloudQueue.waiting}/{scanner.apiDegradedMode.routeControl.cloudQueue.maxWaiting} · 当前受影响 {scanner.apiDegradedMode.routeControl.affectedRouteCount} 条 · 备用复核 {scanner.apiDegradedMode.routeControl.cloudRouteCount ?? 0} 条 · 历史待复核 {scanner.apiDegradedMode.routeControl.awaitingRecheckRouteCount ?? 0} 条
-            </Typography.Text>
-          </div>
-          <details style={{ marginBottom: 16 }}>
+      <section className="astro-rules-card">
+        <div className="astro-rules-section-head"><strong>扫描与复核</strong><Tag>目标 / 实际</Tag></div>
+        <div className="astro-metric-strip">
+          <div><span>全量发现间隔</span><strong>{scanner ? `${scanner.intervalSeconds} 秒` : "—"}</strong></div>
+          <div><span>实际扫描耗时</span><strong>{formatDuration(scanner?.lastScanDurationMs)}</strong></div>
+          <div><span>热点目标间隔</span><strong>{formatDuration(scanner?.hotMonitor?.intervalMs)}</strong></div>
+          <div><span>正在复核</span><strong>{scanner?.hotMonitor?.inFlightRouteCount ?? "—"} / {scanner?.hotMonitor?.workers ?? "—"}</strong></div>
+          <div><span>当前热点</span><strong>{scanner?.hotMonitor?.routeCount ?? "—"}</strong></div>
+          <div><span>最长未重新开始</span><strong>{formatDuration(scanner?.hotMonitor?.maxRouteWaitSinceLastStartMs)}</strong></div>
+        </div>
+      </section>
+      <section className="astro-rules-card" id="astro-route-status">
+        <div className="astro-rules-section-head"><strong>路线明细</strong><span className="astro-cloud-queue">云端执行 {control?.cloudQueue.active ?? "—"}/{control?.cloudQueue.maxActive ?? "—"} · 排队 {control?.cloudQueue.waiting ?? "—"}/{control?.cloudQueue.maxWaiting ?? "—"}</span></div>
+        <Tabs activeKey={routeTab} onChange={setRouteTab} items={[
+          {key:"hot",label:`当前热点 · ${scanner?.hotMonitor?.routeCount ?? "—"}`},
+          {key:"affected",label:`当前受影响 · ${activeCount}`},
+          {key:"history",label:`历史记录 · ${control?.routes.filter(row => !row.evidenceFresh).length ?? 0}`}
+        ]} />
+        {routeTab === "hot" ? (<Table size="small" locale={{ emptyText: statusQuery.isLoading ? "正在读取热点" : statusQuery.isError ? "未取得最新热点数据" : "当前没有热点路线" }} rowKey={row => `${row.symbol}:${row.type}:${row.buyExchange}:${row.sellExchange}`}
+          pagination={{ pageSize: 5, hideOnSinglePage: true }} scroll={{ x: 790 }} dataSource={scanner?.hotMonitor?.routeWaits ?? []}
+          columns={[
+            { title: "路线", render: (_, row) => <div className="astro-route-name"><strong>{row.symbol} <small>{row.type}</small></strong><span>{row.buyExchange} → {row.sellExchange}</span></div> },
+            { title: "状态", render: (_, row) => row.listingProbe ? (row.inFlight ? "上市探测中" : "等待上市探测") : row.inFlight ? "复核中" : row.fundingWaiting ? "等待资金费更新" : "等待下一次复核" },
+            { title: "首次开始前等待", render: (_, row) => row.firstDirectCheckStartedAtMs ? formatDuration(row.firstDirectCheckStartedAtMs - row.registeredAtMs) : "尚未开始" },
+            { title: "距实际开始", render: (_, row) => formatDuration(row.waitSinceLastStartMs) },
+            { title: "本轮目标间隔", render: (_, row) => formatDuration(row.pollIntervalMs) },
+            { title: "上次检查耗时", render: (_, row) => formatDuration(row.lastDirectDurationMs) },
+            { title: "已完成检查", dataIndex: "checks" }
+          ]} />) : (          <Table size="small" rowKey="route" pagination={{ pageSize: 6 }} scroll={{ x: 760 }} locale={{ emptyText: routeTab === "affected" ? "当前没有受影响路线" : "暂无历史复核记录" }}
+            dataSource={routeTab === "affected" ? activeRoutes : control?.routes.filter(row => !row.evidenceFresh) ?? []}
+            expandable={{ expandedRowRender: row => <div className="astro-route-detail"><p>{routeAction(row, cloudReady)}</p><p>异常持续：{row.evidenceFresh ? `${row.durationSeconds ?? 0} 秒` : "无近期证据，不续计"}</p>{row.error ? <pre>{row.error}</pre> : null}</div> }}
+            columns={[
+              { title: "路线", key: "route", width: 200, render: (_, row) => routeName(row) },
+              { title: "当前状态", key: "mode", width: 130, render: (_, row) => <Tag color={!row.evidenceFresh ? "default" : row.mode === "paused" ? "orange" : row.mode === "tencent_cloud" ? "blue" : "green"}>{!row.evidenceFresh ? "历史记录待更新" : row.mode === "paused" ? "本轮暂不建卡" : row.mode === "tencent_cloud" ? "腾讯云复核" : "本机复核"}</Tag> },
+              { title: "原因", key: "reason", width: 220, render: (_, row) => <span>{!row.evidenceFresh ? "上次：" : ""}{routeReason(row, deadline)}</span> },
+              { title: "最近检查 / 成功（北京时间）", key: "time", width: 195, render: (_, row) => <div><div>检查 {formatTime(row.lastCheckedAt)}</div><Typography.Text type="secondary">成功 {formatTime(row.lastSuccessfulVerificationAt)}</Typography.Text></div> },
+            ]} />)}
+      </section>
+      <details className="astro-rules-card"><summary>复核机制与固定要求</summary>          <details style={{ marginBottom: 16 }}>
             <summary style={{ cursor: "pointer" }}>查看复核与提醒机制</summary>
             <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>CEX 本机复核超过 {deadline} 秒可按路线切云；DEX 按原扫描节奏重新询价。盘口过期、时间不同步只等待新行情，不推送、不触发应急切换。本机故障推送{degraded?.localFaultPushEnabled ? "已启用" : "已暂停"}；符合条件的连接或排队故障持续 {control?.faultDelaySeconds ?? 20} 秒才汇总提醒，全局间隔 {(control?.globalPushIntervalSeconds ?? 600) / 60} 分钟。CEX 恢复探针每 {degraded?.recoveryProbe.intervalSeconds ?? 2} 秒运行，本机真实盘口稳定 {control?.recoveryStableSeconds ?? 10} 秒后切回。DEX 使用下一次真实路线复核更新状态。无近期证据不当作当前故障；无有效复核不建卡。</Typography.Paragraph>
           </details>
-          {statusQuery.isError ? <Typography.Paragraph type="warning">状态刷新失败，以下是上次读取结果。</Typography.Paragraph> : null}
-          <Table size="small" rowKey="route" pagination={{ pageSize: 6 }} scroll={{ x: 1280 }}
-            dataSource={scanner.apiDegradedMode.routeControl.routes}
-            columns={[
-              { title: "路线", key: "route", width: 230, render: (_, row) => routeName(row) },
-              { title: "当前状态", key: "mode", width: 130, render: (_, row) => <Tag color={!row.evidenceFresh ? "default" : row.mode === "paused" ? "orange" : row.mode === "tencent_cloud" ? "blue" : "green"}>{!row.evidenceFresh ? "历史记录待更新" : row.mode === "paused" ? "本轮暂不建卡" : row.mode === "tencent_cloud" ? "腾讯云复核" : "本机复核"}</Tag> },
-              { title: "具体原因", key: "reason", width: 260, render: (_, row) => <div>{!row.evidenceFresh ? "上次：" : ""}{routeReason(row, deadline)}{row.error ? <details><summary style={{ cursor: "pointer", color: "#777" }}>原始信息</summary><Typography.Text type="secondary" style={{ overflowWrap: "anywhere" }}>{row.error}</Typography.Text></details> : null}</div> },
-              { title: "下一步", key: "action", width: 270, render: (_, row) => routeAction(row, cloudReady) },
-              { title: "异常持续", key: "duration", render: (_, row) => row.evidenceFresh ? (row.durationSeconds ? `${row.durationSeconds.toFixed(1)}秒` : "—") : "无近期证据，不续计" },
-              { title: "最近检查 / 成功（北京时间）", key: "time", width: 195, render: (_, row) => <div><div>检查 {formatTime(row.lastCheckedAt)}</div><Typography.Text type="secondary">成功 {formatTime(row.lastSuccessfulVerificationAt)}</Typography.Text></div> },
-            ]} />
-        </section>
-      ) : null}
-
-      <section className="astro-rules-card">
-        <div className="astro-rules-section-head"><strong>扫描与建卡时间</strong><Tag>目标间隔与实际等待分别统计</Tag></div>
-        <Space size={[12, 8]} wrap>
-          <span>普通发现目标：{scanner ? `${scanner.intervalSeconds} 秒` : "—"}</span>
-          <span>最近一轮耗时：{formatDuration(scanner?.lastScanDurationMs)}</span>
-          <span>热点目标：{formatDuration(scanner?.hotMonitor?.intervalMs)}</span>
-          <span>复核中：{scanner?.hotMonitor?.inFlightRouteCount ?? "—"} / {scanner?.hotMonitor?.workers ?? "—"}</span>
-          <span>热点路线：{scanner?.hotMonitor?.routeCount ?? "—"}</span>
-          <span>资金费预筛省去盘口复核：{scanner?.hotMonitor?.fundingDepthSkippedCount ?? 0} 次</span>
-          <span>其中上市探测：{scanner?.hotMonitor?.listingProbeRouteCount ?? "—"}</span>
-          <span>最长未重新开始：{formatDuration(scanner?.hotMonitor?.maxRouteWaitSinceLastStartMs)}</span>
-        </Space>
         <Typography.Paragraph type="secondary" style={{ marginTop: 12 }}>
           热点目标间隔不是每条路线的速度保证。空闲名额立即补位；慢请求、路线数量和限流仍会影响等待。
           交易所–交易所建卡需要两次独立的双腿盘口验证。链上–交易所建卡前连续核实 3 次真实询价，每轮间隔 1 秒，每轮核对同数量合约深度；重复时间戳不计数，任一轮不达标就停止本轮建卡。CEX 最终报价年龄不超过 {scanner?.finalRevalidation?.maxQuoteAgeSeconds ?? 3} 秒，
@@ -237,18 +246,34 @@ export default function AstroStatusPage() {
         </Typography.Paragraph>
 
         <Typography.Paragraph type="secondary">Pulse 资金费初筛不新增 API 请求；盘口条件通过后查精确资金费，复用 10 秒缓存。Pulse 明显负费率最多延后 10 秒，临近零、缺失或过期时继续复核；差价达到 2.3% 直接复核盘口，实际差价 ≥ 2.5% 才豁免。API 失败按 2／5／10 秒重试，FF 不检查资金费。</Typography.Paragraph>
-        <Table size="small" rowKey={row => `${row.symbol}:${row.type}:${row.buyExchange}:${row.sellExchange}`}
-          pagination={{ pageSize: 5, hideOnSinglePage: true }} scroll={{ x: 790 }} dataSource={scanner?.hotMonitor?.routeWaits ?? []}
-          columns={[
-            { title: "路线", render: (_, row) => `${row.symbol} ${row.type} ${row.buyExchange}/${row.sellExchange}` },
-            { title: "状态", render: (_, row) => row.listingProbe ? (row.inFlight ? "上市探测中" : "等待上市探测") : row.inFlight ? "复核中" : row.fundingWaiting ? "等待资金费更新" : "等待下一次复核" },
-            { title: "首次开始前等待", render: (_, row) => row.firstDirectCheckStartedAtMs ? formatDuration(row.firstDirectCheckStartedAtMs - row.registeredAtMs) : "尚未开始" },
-            { title: "距实际开始", render: (_, row) => formatDuration(row.waitSinceLastStartMs) },
-            { title: "本轮目标间隔", render: (_, row) => formatDuration(row.pollIntervalMs) },
-            { title: "上次检查耗时", render: (_, row) => formatDuration(row.lastDirectDurationMs) },
-            { title: "已完成检查", dataIndex: "checks" }
-          ]} />
-      </section>
+</details>
+      {(status?.pendingSubmissions?.recentResolutions?.length ?? 0) > 0 ? <details className="astro-rules-card" open>
+        <summary style={{ cursor: "pointer" }}>最近建卡结果</summary>
+        {status?.pendingSubmissions?.recentResolutions?.map(item => <div key={item.submissionId ?? `${item.resolvedAt}:${item.name}`} style={{ marginTop: 8 }}>
+          <Tag color={item.state === "confirmed" ? "green" : "default"}>{item.state === "confirmed" ? "已确认成功" : "未执行，提交已结束"}</Tag>
+          {item.name} {item.type} {item.buyEx}/{item.sellEx} · {formatTime(item.resolvedAt)} · {item.resolution}
+        </div>)}
+      </details> : null}
+      {news ? <details className="astro-rules-card" id="astro-news-policy">
+        <summary style={{ cursor: "pointer" }}>公告联动 · {news.blockCount} 项下架限制 · {news.listingSymbols.length} 个公告预建币种
+          {news.lastError || news.storageError || news.cardCheckError || news.listingScheduleError || news.cardChecks.some(row => row.status === "pending") ? " · 待处理" : ""}
+        </summary>
+        <p>每 {news.intervalSeconds} 秒集中读取新闻；下架按币种、交易所和现货／合约限制新开仓，已有卡片保留平仓设置。上架公告可提前创建暂停卡：双方已公告，或一方已交易＋另一方已公告待上市。不要求开市、价差、资金费或盘口达标。</p>
+        <p>新闻源更新：{formatTime(news.sourceUpdatedAt)} · 卡片核对：{formatTime(news.lastCardCheckAt)}</p>
+        {news.lastError || news.storageError || news.cardCheckError ? <Alert type="warning" showIcon message="公告联动部分未完成" description={`新闻：${news.lastError || "正常"}；持久化：${news.storageError || "正常"}；卡片核对：${news.cardCheckError || "正常"}。已知下架限制继续保留。`} /> : null}
+        {news.listingSymbols.length ? <p>公告预建：{news.listingSymbols.join("、")}</p> : null}
+        <p>预建卡采用已保存的开／平仓阈值作为初始设置，不代表当前可成交差价；不会自动启动，也不会因尚无行情或差价不达标而自动清理。</p>
+        {news.listingScheduleError ? <Alert type="warning" message={`公告预建暂未完成：${news.listingScheduleError}`} /> : null}
+        {news.listingRoutes?.map(row => <div key={`${row.symbol}:${row.type}:${row.buyExchange}:${row.sellExchange}`}>
+          <Tag color="blue">{row.category === "both_announced" ? "双方已公告" : "已交易＋已公告"}</Tag>
+          {row.symbol} {row.type} · {row.buyExchange}/{row.sellExchange} · {({ existing: "卡片已存在", syncing: "提交处理中", queued: "排队中", submission_pending: "提交待确认", waiting_submission: "等待提交" } as Record<string, string>)[row.state] || row.state}
+        </div>)}
+        {news.unresolvedNoticeCount ? <p>另有 {news.unresolvedNoticeCount} 条公告待解析，尚未确认具体限制范围。</p> : null}
+        <Space wrap>{news.blocks.map(row => <a key={`${row.symbol}:${row.exchange}:${row.market}`} href={row.sourceUrl} target="_blank" rel="noreferrer"><Tag color="red">{row.symbol} · {row.exchange} · {row.market === "spot" ? "现货" : "合约"} 禁开</Tag></a>)}</Space>
+        {news.cardChecks.map(row => <div key={row.id}>{row.symbol} {row.type} · {row.buyExchange}/{row.sellExchange}：{row.status === "confirmed" ? "已复读确认禁止开仓" : row.status === "removed" ? "卡片已不存在" : row.status === "route_changed" ? "路线已改变，等待下轮核对" : `禁止开仓待确认（${row.error || "等待核对"}）`}</div>)}
+      </details> : null}
+
+
 
 
 

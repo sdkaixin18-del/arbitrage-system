@@ -1,0 +1,23 @@
+[Unit]
+Description=Isolated Astro depth transport trial (read-only)
+After=network-online.target wg-quick@wg-qmt-test.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/astro-depth-trial/backend
+EnvironmentFile=/etc/astro-depth-trial.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/astro-funding-cloud/venv/bin/python -m uvicorn app.astro_depth_trial:app --host 192.0.2.1 --port 18767 --workers 1 --no-access-log
+Restart=no
+RuntimeMaxSec=1800
+MemoryMax=192M
+CPUQuota=30%
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

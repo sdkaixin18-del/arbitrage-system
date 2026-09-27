@@ -11,8 +11,9 @@ _POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix='astro-transfer')
 _LOCK = threading.RLock()
 _CACHE = {}
 _PENDING = {}
-_CLIENT = httpx.Client(timeout=1.5, headers={'User-Agent': 'Mozilla/5.0'},
-                     limits=httpx.Limits(max_connections=4, max_keepalive_connections=4))
+_CLIENT = httpx.Client(timeout=httpx.Timeout(connect=2, read=3, write=2, pool=2),
+                     headers={'User-Agent': 'Mozilla/5.0'},
+                     limits=httpx.Limits(max_connections=8, max_keepalive_connections=4))
 _NAMES = {'gate':'Gate','bitget':'Bitget','okx':'OKX','bybit':'Bybit','binance':'Binance',
           'kucoin':'KuCoin','mexc':'MEXC'}
 TTL = 60
@@ -190,6 +191,7 @@ def collect(pair, timeout=5):
         for key in keys:
             cached = _CACHE.get(key)
             if not cached or time.monotonic()-cached[0] >= TTL:
+                evidence.append({'status': 'unknown', 'exchange': key[0], 'coin': key[1]})
                 continue
             result = cached[1]
             evidence.append(result)

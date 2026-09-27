@@ -4,6 +4,7 @@ import {
   FundOutlined,
   HomeOutlined,
   LineChartOutlined,
+  OrderedListOutlined,
   ReadOutlined,
   RobotOutlined
 } from "@ant-design/icons";
@@ -23,12 +24,14 @@ const AstroScanRulesPage = lazy(() => import("./pages/AstroScanRulesPage"));
 const AstroAutoCardLayout = lazy(() => import("./pages/AstroAutoCardLayout"));
 const AstroStatusPage = lazy(() => import("./pages/AstroStatusPage"));
 const DexHistoryPage = lazy(() => import("./pages/DexHistoryPage"));
+const AsterFundingRankPage = lazy(() => import("./pages/AsterFundingRankPage"));
 const LocalExchangeNewsPage = lazy(() => import("./pages/LocalExchangeNewsPage"));
 
 const navItems = [
   { key: "/exchange-announcements", icon: <ReadOutlined />, label: "交易所新闻" },
   { key: "/fs", icon: <FundOutlined />, label: "交易监控" },
   { key: "/astro", icon: <RobotOutlined />, label: "Astro 建卡" },
+  { key: "/aster-funding-rank", icon: <OrderedListOutlined />, label: "Aster 费率榜" },
   { key: "/dex-history", icon: <LineChartOutlined />, label: "DEX历史差价" }
 ];
 
@@ -300,6 +303,8 @@ function Shell() {
   const inDexHistory = location.pathname.startsWith("/dex-history");
   const selectedKey = location.pathname === "/exchange-announcements" || location.pathname.startsWith("/exchange-announcements/")
       ? "/exchange-announcements"
+    : location.pathname.startsWith("/aster-funding-rank")
+      ? "/aster-funding-rank"
     : location.pathname.startsWith("/astro") || location.pathname.startsWith("/fs/astro-rules")
       ? "/astro"
     : inDexHistory
@@ -334,6 +339,7 @@ function Shell() {
             <Route path="/" element={<Navigate to="/fs" replace />} />
             <Route path="/exchange-announcements" element={<LocalExchangeNewsPage />} />
             <Route path="/fs" element={<FsPage />} />
+            <Route path="/aster-funding-rank" element={<AsterFundingRankPage />} />
             <Route path="/astro" element={<AstroAutoCardLayout />}>
               <Route index element={<Navigate to="status" replace />} />
               <Route path="status" element={<AstroStatusPage />} />

@@ -8,7 +8,9 @@ from test_astro_sdk import config
 
 
 @pytest.fixture
-def clock(monkeypatch):
+def clock(monkeypatch, tmp_path):
+    (tmp_path / 'settings.json').write_text('{}')
+    monkeypatch.setenv('ASTRO_SPREAD_SUBSCRIPTIONS_FILE', str(tmp_path / 'settings.json'))
     now = [100.0]
     fake = SimpleNamespace(monotonic=lambda: now[0], sleep=lambda seconds: now.__setitem__(0, now[0] + seconds))
     monkeypatch.setattr(budget, 'time', fake)

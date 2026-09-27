@@ -12,6 +12,8 @@ import {
   Button,
   Checkbox,
   Collapse,
+  ConfigProvider,
+  Modal,
   Input,
   InputNumber,
   Popconfirm,
@@ -33,6 +35,8 @@ import type {
   CryptoSymbolMappingScanResponse
 } from "../api";
 import { cryptoApi as api } from "../api/crypto";
+import { changedRuleKeys, formatRuleValue, ruleLabels, rulesFromStatus } from "../lib/astroRuleDraft";
+import type { RuleValues } from "../lib/astroRuleDraft";
 import { useAstroRulesDraft } from "./AstroAutoCardLayout";
 
 interface BlockedPair {
@@ -81,12 +85,17 @@ export default function AstroScanRulesPage() {
   const readDraft = <T,>(key: string, fallback: T): T => draftRef.current && key in draftRef.current
     ? draftRef.current[key] as T : fallback;
   const queryClient = useQueryClient();
+  const [baseline, setBaseline] = useState<RuleValues | null>(() => readDraft("savedBaseline", null));
+  const [confirmSave, setConfirmSave] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const [draftLoaded, setDraftLoaded] = useState(Boolean(draftRef.current));
   const [markets, setMarkets] = useState<string[]>(() => readDraft("markets", []));
   const [minVolumeUsdt, setMinVolumeUsdt] = useState(() => readDraft("minVolumeUsdt", 10000));
   const [deleteRearmPct, setDeleteRearmPct] = useState(() => readDraft("deleteRearmPct", 20));
   const [deletePullbackPctPoints, setDeletePullbackPctPoints] = useState(() => readDraft("deletePullbackPctPoints", 0.5));
   const [ffBybitSellExceptionEnabled, setFfBybitSellExceptionEnabled] = useState(() => readDraft("ffBybitSellExceptionEnabled", false));
+  const [ffBybitSellExceptionMinOpenSpreadPct, setFfBybitSellExceptionMinOpenSpreadPct] = useState(() => readDraft("ffBybitSellExceptionMinOpenSpreadPct", 10));
+  const [scanIntervalSeconds, setScanIntervalSeconds] = useState(() => readDraft("scanIntervalSeconds", 8));
   const [ffMinOpenSpreadPct, setFfMinOpenSpreadPct] = useState(() => readDraft("ffMinOpenSpreadPct", 1));
   const [sfMinOpenSpreadPct, setSfMinOpenSpreadPct] = useState(() => readDraft("sfMinOpenSpreadPct", 1.3));
   const [sfOkxdexMinOpenSpreadPct, setSfOkxdexMinOpenSpreadPct] = useState(() => readDraft("sfOkxdexMinOpenSpreadPct", 1.5));
@@ -129,32 +138,37 @@ export default function AstroScanRulesPage() {
   const scanner = statusQuery.data?.spreadScanner;
 
   const loadRules = (nextScanner = scanner, nextStatus = statusQuery.data) => {
-    if (!nextScanner) return;
-    setSfPancakeswapV3AutoCardEnabled(nextScanner.autoCardRules?.sf.pancakeswapV3Enabled ?? false);
-    setMarkets([...nextScanner.subscriptions]);
-    setMinVolumeUsdt(nextScanner.minVolumeUsdt ?? 10000);
-    setDeleteRearmPct(nextScanner.deleteRearmPct ?? 20);
-    setDeletePullbackPctPoints(nextScanner.deletePullbackPctPoints ?? 0.5);
-    setFfBybitSellExceptionEnabled(nextScanner.autoCardRules?.ff.bybitSellException?.enabled ?? false);
-    setFfMinOpenSpreadPct(nextScanner.autoCardRules?.ff.minOpenSpreadPctExclusive ?? 1);
-    setSfMinOpenSpreadPct(nextScanner.autoCardRules?.sf.minOpenSpreadPctExclusive ?? 1.3);
-    setSfOkxdexMinOpenSpreadPct(nextScanner.autoCardRules?.sf.dexMinOpenSpreadPctExclusive?.okxdex ?? 1.5);
-    setSfPancakeswapV3MinOpenSpreadPct(nextScanner.autoCardRules?.sf.dexMinOpenSpreadPctExclusive?.pancakeswapv3 ?? 1.5);
-    setSfMinShortFundingRatePct(nextScanner.autoCardRules?.sf.minShortFundingRatePct ?? 0);
-    setSfOkxdexAutoCardEnabled(nextScanner.autoCardRules?.sf.okxDexRoute?.autoCardEnabled ?? true);
-    setFsBorrowAutoCardEnabled(nextScanner.autoCardRules?.fsBorrow?.enabled ?? true);
-    setFsBorrowMinCycleProfitPct(nextScanner.autoCardRules?.fsBorrow?.minCycleProfitPctExclusive ?? 0.2);
-    setFsBorrowMinOpenSpreadPct(nextScanner.autoCardRules?.fsBorrow?.minOpenSpreadPctExclusive ?? 1);
-    setConfirmations(nextScanner.confirmations ?? 2);
-    setMaxQuoteAgeSeconds(nextScanner.maxQuoteAgeSeconds ?? 20);
-    setExcludeDelistedExchangeCards(nextScanner.delistingRule?.enabled ?? true);
-    setGreaterPriceAlertPct(nextStatus?.defaultGreaterPriceAlertPct ?? null);
-    setPriceChangeAlertPct(nextStatus?.defaultPriceChangeAlertPct ?? null);
-    setPriceChangeAlertOnlyRise(nextStatus?.defaultPriceChangeAlertOnlyRise ?? false);
-    setMinNotionalUsdt(nextStatus?.defaultMinNotionalUsdt ?? 6);
-    setMaxNotionalUsdt(nextStatus?.defaultMaxNotionalUsdt ?? 40);
-    setBlockedCoins([...(nextScanner.blockedCoins ?? [])]);
-    setBlockedPairs([...(nextScanner.blockedPairs ?? [])]);
+    if (!nextScanner || !nextStatus || nextScanner.settingsHealth?.newCardsAllowed === false) return;
+    const saved = rulesFromStatus(nextStatus);
+    setMarkets(saved.markets);
+    setMinVolumeUsdt(saved.minVolumeUsdt);
+    setBlockedPairs(saved.blockedPairs);
+    setBlockedCoins(saved.blockedCoins);
+    setDeleteRearmPct(saved.deleteRearmPct);
+    setDeletePullbackPctPoints(saved.deletePullbackPctPoints);
+    setFfMinOpenSpreadPct(saved.ffMinOpenSpreadPct);
+    setFfBybitSellExceptionEnabled(saved.ffBybitSellExceptionEnabled);
+    setFfBybitSellExceptionMinOpenSpreadPct(saved.ffBybitSellExceptionMinOpenSpreadPct);
+    setScanIntervalSeconds(saved.scanIntervalSeconds);
+    setSfMinOpenSpreadPct(saved.sfMinOpenSpreadPct);
+    setSfOkxdexMinOpenSpreadPct(saved.sfOkxdexMinOpenSpreadPct);
+    setSfPancakeswapV3MinOpenSpreadPct(saved.sfPancakeswapV3MinOpenSpreadPct);
+    setSfMinShortFundingRatePct(saved.sfMinShortFundingRatePct);
+    setSfOkxdexAutoCardEnabled(saved.sfOkxdexAutoCardEnabled);
+    setSfPancakeswapV3AutoCardEnabled(saved.sfPancakeswapV3AutoCardEnabled);
+    setFsBorrowAutoCardEnabled(saved.fsBorrowAutoCardEnabled);
+    setFsBorrowMinCycleProfitPct(saved.fsBorrowMinCycleProfitPct);
+    setFsBorrowMinOpenSpreadPct(saved.fsBorrowMinOpenSpreadPct);
+    setConfirmations(saved.confirmations);
+    setMaxQuoteAgeSeconds(saved.maxQuoteAgeSeconds);
+    setExcludeDelistedExchangeCards(saved.excludeDelistedExchangeCards);
+    setGreaterPriceAlertPct(saved.greaterPriceAlertPct);
+    setPriceChangeAlertPct(saved.priceChangeAlertPct);
+    setPriceChangeAlertOnlyRise(saved.priceChangeAlertOnlyRise);
+    setMinNotionalUsdt(saved.minNotionalUsdt);
+    setMaxNotionalUsdt(saved.maxNotionalUsdt);
+    setBaseline(saved);
+    setSaveError("");
     setDraftLoaded(true);
   };
 
@@ -172,13 +186,13 @@ export default function AstroScanRulesPage() {
 
   useEffect(() => {
     if (draftLoaded) draftRef.current = {
-      markets, minVolumeUsdt, deleteRearmPct, deletePullbackPctPoints, ffMinOpenSpreadPct, ffBybitSellExceptionEnabled, sfMinOpenSpreadPct, sfOkxdexMinOpenSpreadPct, sfPancakeswapV3MinOpenSpreadPct, sfMinShortFundingRatePct, sfOkxdexAutoCardEnabled, sfPancakeswapV3AutoCardEnabled, fsBorrowAutoCardEnabled, fsBorrowMinCycleProfitPct, fsBorrowMinOpenSpreadPct, confirmations, maxQuoteAgeSeconds, excludeDelistedExchangeCards, greaterPriceAlertPct, priceChangeAlertPct, priceChangeAlertOnlyRise, minNotionalUsdt, maxNotionalUsdt, blockedCoins, blockedCoinInput, blockedPairs, blockExchanges, blockMarketTypes, blockSymbol, blockedSearch, mappingDraft, editingMappingId, mappingScanResult
+      savedBaseline: baseline, markets, minVolumeUsdt, deleteRearmPct, deletePullbackPctPoints, ffMinOpenSpreadPct, ffBybitSellExceptionEnabled, ffBybitSellExceptionMinOpenSpreadPct, scanIntervalSeconds, sfMinOpenSpreadPct, sfOkxdexMinOpenSpreadPct, sfPancakeswapV3MinOpenSpreadPct, sfMinShortFundingRatePct, sfOkxdexAutoCardEnabled, sfPancakeswapV3AutoCardEnabled, fsBorrowAutoCardEnabled, fsBorrowMinCycleProfitPct, fsBorrowMinOpenSpreadPct, confirmations, maxQuoteAgeSeconds, excludeDelistedExchangeCards, greaterPriceAlertPct, priceChangeAlertPct, priceChangeAlertOnlyRise, minNotionalUsdt, maxNotionalUsdt, blockedCoins, blockedCoinInput, blockedPairs, blockExchanges, blockMarketTypes, blockSymbol, blockedSearch, mappingDraft, editingMappingId, mappingScanResult
     };
-  }, [draftLoaded, draftRef, markets, minVolumeUsdt, deleteRearmPct, deletePullbackPctPoints, ffMinOpenSpreadPct, ffBybitSellExceptionEnabled, sfMinOpenSpreadPct, sfOkxdexMinOpenSpreadPct, sfPancakeswapV3MinOpenSpreadPct, sfMinShortFundingRatePct, sfOkxdexAutoCardEnabled, sfPancakeswapV3AutoCardEnabled, fsBorrowAutoCardEnabled, fsBorrowMinCycleProfitPct, fsBorrowMinOpenSpreadPct, confirmations, maxQuoteAgeSeconds, excludeDelistedExchangeCards, greaterPriceAlertPct, priceChangeAlertPct, priceChangeAlertOnlyRise, minNotionalUsdt, maxNotionalUsdt, blockedCoins, blockedCoinInput, blockedPairs, blockExchanges, blockMarketTypes, blockSymbol, blockedSearch, mappingDraft, editingMappingId, mappingScanResult]);
+  }, [baseline, draftLoaded, draftRef, markets, minVolumeUsdt, deleteRearmPct, deletePullbackPctPoints, ffMinOpenSpreadPct, ffBybitSellExceptionEnabled, ffBybitSellExceptionMinOpenSpreadPct, scanIntervalSeconds, sfMinOpenSpreadPct, sfOkxdexMinOpenSpreadPct, sfPancakeswapV3MinOpenSpreadPct, sfMinShortFundingRatePct, sfOkxdexAutoCardEnabled, sfPancakeswapV3AutoCardEnabled, fsBorrowAutoCardEnabled, fsBorrowMinCycleProfitPct, fsBorrowMinOpenSpreadPct, confirmations, maxQuoteAgeSeconds, excludeDelistedExchangeCards, greaterPriceAlertPct, priceChangeAlertPct, priceChangeAlertOnlyRise, minNotionalUsdt, maxNotionalUsdt, blockedCoins, blockedCoinInput, blockedPairs, blockExchanges, blockMarketTypes, blockSymbol, blockedSearch, mappingDraft, editingMappingId, mappingScanResult]);
 
   const reloadRules = async () => {
     const result = await statusQuery.refetch();
-    if (result.data?.spreadScanner) loadRules(result.data.spreadScanner, result.data);
+    if (!result.isError && result.data?.spreadScanner) loadRules(result.data.spreadScanner, result.data);
     void settingsQuery.refetch();
   };
 
@@ -211,42 +225,42 @@ export default function AstroScanRulesPage() {
     ))
     : blockedPairs;
 
+  const draftValues: RuleValues = {markets, minVolumeUsdt, blockedPairs, blockedCoins, deleteRearmPct, deletePullbackPctPoints, ffMinOpenSpreadPct, ffBybitSellExceptionEnabled, ffBybitSellExceptionMinOpenSpreadPct, scanIntervalSeconds, sfMinOpenSpreadPct, sfOkxdexMinOpenSpreadPct, sfPancakeswapV3MinOpenSpreadPct, sfMinShortFundingRatePct, sfOkxdexAutoCardEnabled, sfPancakeswapV3AutoCardEnabled, fsBorrowAutoCardEnabled, fsBorrowMinCycleProfitPct, fsBorrowMinOpenSpreadPct, confirmations, maxQuoteAgeSeconds, excludeDelistedExchangeCards, greaterPriceAlertPct, priceChangeAlertPct, priceChangeAlertOnlyRise, minNotionalUsdt, maxNotionalUsdt};
+  const changes = baseline ? changedRuleKeys(baseline, draftValues) : [];
+  const settingsUnavailable = scanner?.settingsHealth?.newCardsAllowed === false;
   const saveRules = useMutation({
-    mutationFn: () => {
-      return api.updateAstroSpreadSubscriptions({
-      markets,
-      minVolumeUsdt,
-      blockedPairs,
-      blockedCoins,
-      deleteRearmPct,
-      deletePullbackPctPoints,
-      ffMinOpenSpreadPct,
-      ffBybitSellExceptionEnabled,
-      sfMinOpenSpreadPct,
-      sfOkxdexMinOpenSpreadPct,
-      sfPancakeswapV3MinOpenSpreadPct,
-      sfMinShortFundingRatePct,
-      sfOkxdexAutoCardEnabled,
-      sfPancakeswapV3AutoCardEnabled,
-      fsBorrowAutoCardEnabled,
-      fsBorrowMinCycleProfitPct,
-      fsBorrowMinOpenSpreadPct,
-      confirmations,
-      maxQuoteAgeSeconds,
-      excludeDelistedExchangeCards,
-      greaterPriceAlertPct,
-      priceChangeAlertPct,
-      priceChangeAlertOnlyRise,
-      minNotionalUsdt,
-      maxNotionalUsdt
-    });
+    mutationFn: async (values: RuleValues) => {
+      if (!baseline) throw new Error("规则尚未载入");
+      const fresh = await api.astroAutoCardStatus();
+      if (changedRuleKeys(baseline, rulesFromStatus(fresh)).length) {
+        throw new Error("服务端规则已有变化，请重新载入后再修改；本页输入已保留");
+      }
+      await queryClient.cancelQueries({ queryKey: ["astro-auto-card-status"] });
+      await api.updateAstroSpreadSubscriptions(values);
+      const verified = await api.astroAutoCardStatus();
+      if (changedRuleKeys(values, rulesFromStatus(verified)).length) {
+        throw new Error("保存请求已发出，但回读数值不一致。请核对已保存规则，不要重复提交");
+      }
+      return verified;
     },
-    onSuccess: (data) => {
+    onSuccess: data => {
       queryClient.setQueryData(["astro-auto-card-status"], data);
-      message.success(`扫描规则已保存，下一轮 ${data.spreadScanner?.intervalSeconds ?? 5} 秒扫描生效`);
+      loadRules(data.spreadScanner, data);
+      setConfirmSave(false);
+      message.success("规则已保存并回读确认");
     },
-    onError: (error) => { message.error(`保存失败：${String(error)}`); }
+    onError: error => {
+      setSaveError(String(error));
+      message.error("保存未确认，输入已保留");
+    }
   });
+
+  useEffect(() => {
+    if (!changes.length) return;
+    const protectDraft = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", protectDraft);
+    return () => window.removeEventListener("beforeunload", protectDraft);
+  }, [changes.length]);
 
 
   const scanMappings = useMutation({
@@ -370,47 +384,36 @@ export default function AstroScanRulesPage() {
 
 
   return (
-    <div className="astro-rules-page">
+    <div className="astro-rules-page astro-controls-page">
       <header className="astro-page-toolbar">
-        <div>
-          <Typography.Title level={3}>套利规则</Typography.Title>
-          <Typography.Text type="secondary">设置建卡门槛和新卡参数；链上配置请前往“DEX 配置”。</Typography.Text>
-        </div>
-        <Space wrap>
-          <Button icon={<ReloadOutlined />} loading={statusQuery.isFetching} onClick={reloadRules}>重新载入</Button>
-          <Button type="primary" icon={<SaveOutlined />} loading={saveRules.isPending} disabled={!draftLoaded || markets.length < 2} onClick={() => saveRules.mutate()}>保存全部规则</Button>
-        </Space>
+        <Typography.Title level={3}>套利规则</Typography.Title>
+        <Tag color={changes.length ? "orange" : "default"}>{!draftLoaded ? "读取中" : changes.length ? `${changes.length} 项未保存` : "已载入保存值"}</Tag>
       </header>
+      <nav className="astro-rule-jumps" aria-label="规则分组">
+        <a href="#entry-rules">建卡门槛</a><a href="#scan-rules">扫描与过滤</a><a href="#card-rules">新卡参数</a><a href="#safety-rules">安全约束</a>
+      </nav>
+      <ConfigProvider componentDisabled={saveRules.isPending || !draftLoaded || settingsUnavailable}>
 
       {statusQuery.isError ? <Alert type="error" showIcon message="规则读取失败" description={String(statusQuery.error)} /> : null}
 
 
-      <section className="astro-rules-card astro-auto-rule-card">
-        <div className="astro-rules-section-head">
-          <div>
-            <strong>发现门槛与新卡默认参数</strong>{" "}
-            <Typography.Text type="secondary">筛选候选并复核真实盘口；保存后生效</Typography.Text>
-          </div>
-          <Button type="primary" size="small" icon={<SaveOutlined />} loading={saveRules.isPending} disabled={!draftLoaded || markets.length < 2} onClick={() => saveRules.mutate()}>
-            保存全部规则
-          </Button>
-        </div>
-        <div className="astro-auto-rule-list">
+      <section className="astro-rules-card astro-auto-rule-card" id="entry-rules"><div className="astro-rules-section-head"><strong>建卡门槛</strong></div><div className="astro-auto-rule-list">
           <div className="astro-auto-rule-row">
             <div className="astro-auto-rule-index">01</div>
             <div className="astro-auto-rule-copy">
               <strong>FF 合约—合约</strong>
               <span>允许 BN / BG / OKX / Gate / Aster；Bybit 默认只作买入腿；可开启大差价卖出腿例外；不创建 GC 卡</span>
             </div>
-            <label><span>发现差价大于</span><InputNumber min={0.01} max={100} step={0.1} precision={2} value={ffMinOpenSpreadPct} onChange={(value) => setFfMinOpenSpreadPct(Number(value ?? 1))} addonAfter="%" /></label>
+            <label><span>发现差价大于</span><InputNumber min={0.01} max={100} step={0.1} precision={2} data-modified={changes.includes("ffMinOpenSpreadPct") || undefined} value={ffMinOpenSpreadPct} onChange={(value) => setFfMinOpenSpreadPct(Number(value ?? 1))} addonAfter="%" /></label>
           </div>
           <div className="astro-auto-rule-row">
             <div className="astro-auto-rule-index">01+</div>
             <div className="astro-auto-rule-copy">
               <strong>Bybit 卖出腿例外</strong>
-              <span>其他交易所买入 / Bybit 卖出的 FF，实际开仓差价 &gt; 10% 才建卡；仍须双轮真实盘口复核，新卡暂停</span>
+              <span>其他交易所买入 / Bybit 卖出的 FF，实际开仓差价须大于例外门槛；仍须双轮真实盘口复核，新卡暂停</span>
             </div>
-            <label><span>允许大于 10% 的例外</span><Switch checked={ffBybitSellExceptionEnabled} onChange={setFfBybitSellExceptionEnabled} /></label>
+            <label><span>实际差价大于</span><InputNumber aria-label="Bybit 卖出腿例外差价门槛" min={0.01} max={100} step={0.1} precision={2} data-modified={changes.includes("ffBybitSellExceptionMinOpenSpreadPct") || undefined} value={ffBybitSellExceptionMinOpenSpreadPct} onChange={(value) => setFfBybitSellExceptionMinOpenSpreadPct(Number(value ?? 10))} addonAfter="%" /></label>
+            <label><span>启用例外</span><Switch data-modified={changes.includes("ffBybitSellExceptionEnabled") || undefined} checked={ffBybitSellExceptionEnabled} onChange={setFfBybitSellExceptionEnabled} /></label>
           </div>
           <div className="astro-auto-rule-row">
             <div className="astro-auto-rule-index">02</div>
@@ -418,111 +421,69 @@ export default function AstroScanRulesPage() {
               <strong>SF 现货—合约</strong>
               <span>Pulse 初筛；盘口条件通过后查精确资金费 ≥ 0，缓存 10 秒。实际价差 ≥ 2.5% 豁免</span>
             </div>
-            <label><span>CEX 现货差价大于</span><InputNumber min={0.01} max={100} step={0.1} precision={2} value={sfMinOpenSpreadPct} onChange={(value) => setSfMinOpenSpreadPct(Number(value ?? 1.3))} addonAfter="%" /></label>
+            <label><span>CEX 现货差价大于</span><InputNumber min={0.01} max={100} step={0.1} precision={2} data-modified={changes.includes("sfMinOpenSpreadPct") || undefined} value={sfMinOpenSpreadPct} onChange={(value) => setSfMinOpenSpreadPct(Number(value ?? 1.3))} addonAfter="%" /></label>
             <div className="astro-dex-switches">
-            <Typography.Text type="secondary">两家 DEX 分别设置；发现和实际可成交价差均须严格超过对应门槛，等于不建卡。链上–交易所建卡前连续 3 次真实询价，每轮间隔 1 秒并核对同数量合约深度；不复用热点报价，重复或过期报价、任一轮不达标均停止本轮建卡。</Typography.Text>
+            <details className="astro-rule-evidence"><summary>链上复核要求</summary><Typography.Text type="secondary">两家 DEX 分别设置；发现和实际可成交价差均须严格超过对应门槛，等于不建卡。链上–交易所建卡前连续 3 次真实询价，每轮间隔 1 秒并核对同数量合约深度；不复用热点报价，重复或过期报价、任一轮不达标均停止本轮建卡。</Typography.Text></details>
             <div className="astro-auto-rule-switch">
-              <Switch checked={sfOkxdexAutoCardEnabled} onChange={setSfOkxdexAutoCardEnabled} />
+              <Switch data-modified={changes.includes("sfOkxdexAutoCardEnabled") || undefined} checked={sfOkxdexAutoCardEnabled} onChange={setSfOkxdexAutoCardEnabled} />
               <b>OKXDEX {sfOkxdexAutoCardEnabled ? "开卡启用" : "开卡暂停"}</b>
-              <label><span>OKXDEX 差价大于</span><InputNumber aria-label="OKXDEX 建卡差价门槛" min={0.01} max={100} step={0.1} precision={2} value={sfOkxdexMinOpenSpreadPct} onChange={value => setSfOkxdexMinOpenSpreadPct(Number(value ?? 1.5))} addonAfter="%" /></label>
+              <label><span>OKXDEX 差价大于</span><InputNumber aria-label="OKXDEX 建卡差价门槛" min={0.01} max={100} step={0.1} precision={2} data-modified={changes.includes("sfOkxdexMinOpenSpreadPct") || undefined} value={sfOkxdexMinOpenSpreadPct} onChange={value => setSfOkxdexMinOpenSpreadPct(Number(value ?? 1.5))} addonAfter="%" /></label>
             </div>
             <div className="astro-auto-rule-switch">
-              <Switch checked={sfPancakeswapV3AutoCardEnabled} onChange={setSfPancakeswapV3AutoCardEnabled} />
+              <Switch data-modified={changes.includes("sfPancakeswapV3AutoCardEnabled") || undefined} checked={sfPancakeswapV3AutoCardEnabled} onChange={setSfPancakeswapV3AutoCardEnabled} />
               <b>PancakeSwap V3 {sfPancakeswapV3AutoCardEnabled ? "开卡启用" : "开卡暂停"}</b>
-              <label><span>PancakeSwap V3 差价大于</span><InputNumber aria-label="PancakeSwap V3 建卡差价门槛" min={0.01} max={100} step={0.1} precision={2} value={sfPancakeswapV3MinOpenSpreadPct} onChange={value => setSfPancakeswapV3MinOpenSpreadPct(Number(value ?? 1.5))} addonAfter="%" /></label>
+              <label><span>PancakeSwap V3 差价大于</span><InputNumber aria-label="PancakeSwap V3 建卡差价门槛" min={0.01} max={100} step={0.1} precision={2} data-modified={changes.includes("sfPancakeswapV3MinOpenSpreadPct") || undefined} value={sfPancakeswapV3MinOpenSpreadPct} onChange={value => setSfPancakeswapV3MinOpenSpreadPct(Number(value ?? 1.5))} addonAfter="%" /></label>
             </div>
             </div>
           </div>
-          <div className="astro-auto-rule-row astro-auto-fs-rule-row">
+          <div className={`astro-auto-rule-row astro-auto-fs-rule-row ${fsBorrowAutoCardEnabled ? "" : "is-disabled"}`}>
             <div className="astro-auto-rule-index">03</div>
             <div className="astro-auto-rule-copy">
               <strong>FS 借币现货—合约</strong>
               <span>任意已接入合约 / BG 全仓杠杆现货；按同一资金费周期扣除借币成本；BG 实时可借额度必须大于 0</span>
             </div>
             <div className="astro-auto-rule-switch">
-              <Switch checked={fsBorrowAutoCardEnabled} onChange={setFsBorrowAutoCardEnabled} />
+              <Switch data-modified={changes.includes("fsBorrowAutoCardEnabled") || undefined} checked={fsBorrowAutoCardEnabled} onChange={setFsBorrowAutoCardEnabled} />
               <b>{fsBorrowAutoCardEnabled ? "已启用" : "已关闭"}</b>
             </div>
-            <label><span>周期净收益大于</span><InputNumber min={0} max={100} step={0.05} precision={3} value={fsBorrowMinCycleProfitPct} onChange={(value) => setFsBorrowMinCycleProfitPct(Number(value ?? 0.2))} addonAfter="%" /></label>
-            <label><span>发现差价大于</span><InputNumber min={0.01} max={100} step={0.1} precision={2} value={fsBorrowMinOpenSpreadPct} onChange={(value) => setFsBorrowMinOpenSpreadPct(Number(value ?? 1))} addonAfter="%" /></label>
+            <label><span>周期净收益大于</span><InputNumber min={0} max={100} step={0.05} precision={3} data-modified={changes.includes("fsBorrowMinCycleProfitPct") || undefined} value={fsBorrowMinCycleProfitPct} onChange={(value) => setFsBorrowMinCycleProfitPct(Number(value ?? 0.2))} addonAfter="%" /></label>
+            <label><span>发现差价大于</span><InputNumber min={0.01} max={100} step={0.1} precision={2} data-modified={changes.includes("fsBorrowMinOpenSpreadPct") || undefined} value={fsBorrowMinOpenSpreadPct} onChange={(value) => setFsBorrowMinOpenSpreadPct(Number(value ?? 1))} addonAfter="%" /></label>
           </div>
-          <div className="astro-auto-rule-row">
-            <div className="astro-auto-rule-index">04</div>
-            <div className="astro-auto-rule-copy">
-              <strong>下架交易所排除</strong>
-              <span>旧公告索引按币种、交易所及现货／合约市场过滤。新闻监控确认的下架限制始终执行，并检查已有卡片的禁止开仓状态</span>
-            </div>
-            <div className="astro-auto-rule-switch">
-              <Switch checked={excludeDelistedExchangeCards} onChange={setExcludeDelistedExchangeCards} />
-              <b>{excludeDelistedExchangeCards ? "已启用" : "已关闭"}</b>
-            </div>
-          </div>
+
+        </div></section>
+      <section className="astro-rules-card astro-auto-rule-card" id="scan-rules"><div className="astro-rules-section-head"><strong>扫描与过滤</strong></div><div className="astro-auto-rule-list">
           <div className="astro-auto-rule-row">
             <div className="astro-auto-rule-index">05</div>
             <div className="astro-auto-rule-copy">
               <strong>Pulse 初筛与行情时效</strong>
               <span>Pulse 只发现候选；热点路线随后进入直连 API 连续监控</span>
             </div>
-            <label><span>热点触发</span><InputNumber disabled precision={0} value={1} addonAfter="次直连命中" /></label>
-            <label><span>Pulse 报价最长有效</span><InputNumber min={5} max={120} step={1} precision={0} value={maxQuoteAgeSeconds} onChange={(value) => setMaxQuoteAgeSeconds(Number(value ?? 20))} addonAfter="秒" /></label>
+            <label><span>全量发现间隔</span><InputNumber aria-label="全量发现间隔" min={5} max={60} step={1} precision={0} data-modified={changes.includes("scanIntervalSeconds") || undefined} value={scanIntervalSeconds} onChange={(value) => setScanIntervalSeconds(Number(value ?? 8))} addonAfter="秒" /></label>
+            <label><span>Pulse 报价最长有效</span><InputNumber min={5} max={120} step={1} precision={0} data-modified={changes.includes("maxQuoteAgeSeconds") || undefined} value={maxQuoteAgeSeconds} onChange={(value) => setMaxQuoteAgeSeconds(Number(value ?? 20))} addonAfter="秒" /></label>
           </div>
-          <div className="astro-auto-rule-row astro-auto-alert-rule-row">
-            <div className="astro-auto-rule-index">06</div>
-            <div className="astro-auto-rule-copy">
-              <strong>新卡报警设置</strong>
-              <span>写入以后自动创建的 Astro 卡片；数值留空表示该项不报警</span>
-            </div>
-            <label><span>实时差价大于报警</span><InputNumber min={0.01} max={100} step={0.1} precision={2} value={greaterPriceAlertPct} placeholder="留空不报警" onChange={(value) => setGreaterPriceAlertPct(value === null ? null : Number(value))} addonAfter="%" /></label>
-            <div className="astro-auto-price-change-control">
-              <label><span>价格涨跌幅报警</span><InputNumber min={0.01} max={100} step={0.1} precision={2} value={priceChangeAlertPct} placeholder="留空不报警" onChange={(value) => { const next = value === null ? null : Number(value); setPriceChangeAlertPct(next); if (next === null) setPriceChangeAlertOnlyRise(false); }} addonAfter="%" /></label>
-              <Checkbox disabled={priceChangeAlertPct === null} checked={priceChangeAlertOnlyRise} onChange={(event) => setPriceChangeAlertOnlyRise(event.target.checked)}>仅上涨</Checkbox>
-            </div>
-          </div>
-          <div className="astro-auto-rule-row">
-            <div className="astro-auto-rule-index">07</div>
-            <div className="astro-auto-rule-copy">
-              <strong>新卡下单范围</strong>
-              <span>写入以后自动创建的 Astro 卡片；约束每笔下单金额</span>
-            </div>
-            <label><span>最小单笔金额</span><InputNumber min={0.01} max={1000000} step={1} precision={2} value={minNotionalUsdt} onChange={(value) => setMinNotionalUsdt(Number(value ?? 6))} addonAfter="USDT" /></label>
-            <label><span>最大单笔金额</span><InputNumber min={0.01} max={1000000} step={1} precision={2} value={maxNotionalUsdt} onChange={(value) => setMaxNotionalUsdt(Number(value ?? 40))} addonAfter="USDT" /></label>
-          </div>
-          <div className="astro-auto-rule-row is-locked">
-            <div className="astro-auto-rule-index">08</div>
-            <div className="astro-auto-rule-copy">
-              <strong>热点连续直连监控</strong>
-              <span>首次及接近门槛优先；连续远离门槛降为 2～5 秒复查，改善时恢复快速检查。两轮真实盘口通过后建立暂停卡，实际等待见“运行状态”</span>
-            </div>
-            <Tag color="green">系统安全项 · 固定启用</Tag>
-          </div>
-        </div>
-        <Typography.Paragraph type="secondary">
-          新币成交额豁免只适用于明确正式上线后的两小时，并分别核对每条腿的交易所及现货／合约市场。提前公告和未知上线时间不获得豁免。
-          发现差价用于筛选候选；CEX SF/FF 按单笔金额完成两轮真实盘口复核，新卡默认暂停，开仓值按最终验证价格生成。
-        </Typography.Paragraph>
-        {scanner?.delistingRule?.lastError ? <Alert type="error" showIcon message={scanner.delistingRule.lastError} /> : null}
-      </section>
+
+        </div></section>
 
       <section className="astro-rules-card astro-rules-secondary-card">
         <Collapse
           ghost
           items={[{
             key: "basic-filters",
-            label: <div className="astro-secondary-collapse-label"><span><SettingOutlined /> 基础过滤</span><small>次级设置 · 默认收起，不在主界面展示过滤日志</small></div>,
+            label: <div className="astro-secondary-collapse-label"><span><SettingOutlined /> 基础过滤</span></div>,
             children: (
               <div className="astro-rules-basic-grid">
                 <label>
                   <span>24小时成交额门槛</span>
-                  <InputNumber min={0} step={10000} value={minVolumeUsdt} onChange={(value) => setMinVolumeUsdt(Number(value ?? 0))} addonAfter="USDT" />
+                  <InputNumber min={0} step={10000} data-modified={changes.includes("minVolumeUsdt") || undefined} value={minVolumeUsdt} onChange={(value) => setMinVolumeUsdt(Number(value ?? 0))} addonAfter="USDT" />
                 </label>
                 <label>
                   <span>删除后有效回弱</span>
-                  <InputNumber min={0} max={100} step={0.1} value={deletePullbackPctPoints} onChange={(value) => setDeletePullbackPctPoints(Number(value ?? 0))} addonAfter="百分点" />
+                  <InputNumber min={0} max={100} step={0.1} data-modified={changes.includes("deletePullbackPctPoints") || undefined} value={deletePullbackPctPoints} onChange={(value) => setDeletePullbackPctPoints(Number(value ?? 0))} addonAfter="百分点" />
                   <Typography.Text type="secondary">先回弱，再重新突破正常阈值时允许重建</Typography.Text>
                 </label>
                 <label>
                   <span>未回弱直接突破</span>
-                  <InputNumber min={0} max={1000} step={5} value={deleteRearmPct} onChange={(value) => setDeleteRearmPct(Number(value ?? 0))} addonAfter="%" />
+                  <InputNumber min={0} max={1000} step={5} data-modified={changes.includes("deleteRearmPct") || undefined} value={deleteRearmPct} onChange={(value) => setDeleteRearmPct(Number(value ?? 0))} addonAfter="%" />
                   <Typography.Text type="secondary">未回弱时，超过删除参考值该比例才允许重建</Typography.Text>
                 </label>
                 <div>
@@ -600,6 +561,54 @@ export default function AstroScanRulesPage() {
         </div>
       </details>
 
+      <section className="astro-rules-card astro-auto-rule-card" id="card-rules"><div className="astro-rules-section-head"><strong>新卡参数</strong></div><div className="astro-auto-rule-list">
+          <div className="astro-auto-rule-row astro-auto-alert-rule-row">
+            <div className="astro-auto-rule-index">06</div>
+            <div className="astro-auto-rule-copy">
+              <strong>新卡报警设置</strong>
+              <span>写入以后自动创建的 Astro 卡片；数值留空表示该项不报警</span>
+            </div>
+            <label><span>实时差价大于报警</span><InputNumber min={0.01} max={100} step={0.1} precision={2} data-modified={changes.includes("greaterPriceAlertPct") || undefined} value={greaterPriceAlertPct} placeholder="留空不报警" onChange={(value) => setGreaterPriceAlertPct(value === null ? null : Number(value))} addonAfter="%" /></label>
+              <label><span>价格涨跌幅报警</span><InputNumber min={0.01} max={100} step={0.1} precision={2} data-modified={changes.includes("priceChangeAlertPct") || undefined} value={priceChangeAlertPct} placeholder="留空不报警" onChange={(value) => { const next = value === null ? null : Number(value); setPriceChangeAlertPct(next); if (next === null) setPriceChangeAlertOnlyRise(false); }} addonAfter="%" /></label>
+              <Checkbox className="astro-alert-rise-only" disabled={priceChangeAlertPct === null} data-modified={changes.includes("priceChangeAlertOnlyRise") || undefined} checked={priceChangeAlertOnlyRise} onChange={(event) => setPriceChangeAlertOnlyRise(event.target.checked)}>仅上涨</Checkbox>
+          </div>
+          <div className="astro-auto-rule-row">
+            <div className="astro-auto-rule-index">07</div>
+            <div className="astro-auto-rule-copy">
+              <strong>新卡下单范围</strong>
+              <span>写入以后自动创建的 Astro 卡片；约束每笔下单金额</span>
+            </div>
+            <label><span>最小单笔金额</span><InputNumber min={0.01} max={1000000} step={1} precision={2} data-modified={changes.includes("minNotionalUsdt") || undefined} value={minNotionalUsdt} onChange={(value) => setMinNotionalUsdt(Number(value ?? 6))} addonAfter="USDT" /></label>
+            <label><span>最大单笔金额</span><InputNumber min={0.01} max={1000000} step={1} precision={2} data-modified={changes.includes("maxNotionalUsdt") || undefined} value={maxNotionalUsdt} onChange={(value) => setMaxNotionalUsdt(Number(value ?? 40))} addonAfter="USDT" /></label>
+          </div>
+
+        </div></section>
+      <section className="astro-rules-card astro-auto-rule-card" id="safety-rules"><div className="astro-rules-section-head"><strong>安全约束</strong></div><div className="astro-auto-rule-list">
+          <div className="astro-auto-rule-row">
+            <div className="astro-auto-rule-index">04</div>
+            <div className="astro-auto-rule-copy">
+              <strong>下架交易所排除</strong>
+              <span>旧公告索引按币种、交易所及现货／合约市场过滤。新闻监控确认的下架限制始终执行，并检查已有卡片的禁止开仓状态</span>
+            </div>
+            <div className="astro-auto-rule-switch">
+              <Switch data-modified={changes.includes("excludeDelistedExchangeCards") || undefined} checked={excludeDelistedExchangeCards} onChange={setExcludeDelistedExchangeCards} />
+              <b>{excludeDelistedExchangeCards ? "已启用" : "已关闭"}</b>
+            </div>
+          </div>
+          <div className="astro-auto-rule-row is-locked">
+            <div className="astro-auto-rule-index">08</div>
+            <div className="astro-auto-rule-copy">
+              <strong>热点连续直连监控</strong>
+              <span>首次及接近门槛优先；连续远离门槛降为 2～5 秒复查，改善时恢复快速检查。两轮真实盘口通过后建立暂停卡，实际等待见“运行状态”</span>
+            </div>
+            <Tag color="green">系统安全项 · 固定启用</Tag>
+          </div>
+        </div></section>
+      <details className="astro-rules-card"><summary>固定复核要求</summary>        <Typography.Paragraph type="secondary">
+          新币成交额豁免只适用于明确正式上线后的两小时，并分别核对每条腿的交易所及现货／合约市场。提前公告和未知上线时间不获得豁免。
+          发现差价用于筛选候选；CEX SF/FF 按单笔金额完成两轮真实盘口复核，新卡默认暂停，开仓值按最终验证价格生成。
+        </Typography.Paragraph>
+        {scanner?.delistingRule?.lastError ? <Alert type="error" showIcon message={scanner.delistingRule.lastError} /> : null}</details>
       <details className="astro-rules-card astro-settings-detail" id="symbol-mappings"><summary>币名映射 · 展开管理</summary>
         <div className="astro-rules-section-head">
           <div><strong>币名映射</strong> <Typography.Text type="secondary">不同交易所名称归一后才比较差价</Typography.Text></div>
@@ -625,6 +634,27 @@ export default function AstroScanRulesPage() {
         </Typography.Paragraph>
         <Table rowKey="id" size="small" loading={settingsQuery.isLoading} columns={mappingColumns} dataSource={settingsQuery.data?.symbolMappings ?? []} pagination={{ pageSize: 8, size: "small" }} scroll={{ x: 760 }} />
       </details>
+      </ConfigProvider>
+      <footer className="astro-rule-savebar">
+        <span>{changes.length ? `${changes.length} 项未保存` : "无待保存修改"}</span>
+        <Space>
+          <Popconfirm title="重新载入会放弃本页未保存的修改" disabled={!changes.length} onConfirm={reloadRules}>
+            <Button icon={<ReloadOutlined />} disabled={saveRules.isPending} loading={statusQuery.isFetching}
+              onClick={() => { if (!changes.length) void reloadRules(); }}>重新载入</Button>
+          </Popconfirm>
+          <Button type="primary" icon={<SaveOutlined />} disabled={!draftLoaded || !baseline || !changes.length || markets.length < 2 || settingsUnavailable}
+            loading={saveRules.isPending} onClick={() => { setSaveError(""); setConfirmSave(true); }}>核对并保存</Button>
+        </Space>
+      </footer>
+      <Modal title={`确认 ${changes.length} 项规则修改`} open={confirmSave} okText="确认保存" cancelText="继续编辑"
+        confirmLoading={saveRules.isPending} closable={!saveRules.isPending} maskClosable={!saveRules.isPending}
+        cancelButtonProps={{disabled:saveRules.isPending}} okButtonProps={{disabled:!changes.length || settingsUnavailable}}
+        onCancel={() => { if (!saveRules.isPending) setConfirmSave(false); }} onOk={() => saveRules.mutate(draftValues)}>
+        {saveError ? <Alert type="error" showIcon message={saveError} /> : null}
+        <div className="astro-change-list">{changes.map(key => <div key={key}>
+          <strong>{ruleLabels[key]}</strong><div><del>{formatRuleValue(key, baseline![key])}</del><span aria-label="改为"> → </span><b>{formatRuleValue(key, draftValues[key])}</b></div>
+        </div>)}</div>
+      </Modal>
     </div>
   );
 }

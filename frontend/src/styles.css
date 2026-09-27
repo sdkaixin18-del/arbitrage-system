@@ -23686,3 +23686,48 @@ body {
   .book-history-view-switch { font-size: 12px; }
   .book-history-toolbar .ant-segmented { max-width: 100%; overflow-x: auto; }
 }
+.aster-rank-page {
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 20px 24px 36px;
+}
+
+.aster-rank-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.aster-rank-header h3.ant-typography { margin: 0 0 4px; }
+.aster-rank-meta { display: flex; gap: 8px 22px; flex-wrap: wrap; color: #5d6470; margin-bottom: 18px; font-size: 13px; }
+.aster-rank-page .ant-alert { margin-bottom: 14px; }
+.aster-rank-loading { display: flex; justify-content: center; padding: 72px 0; }
+.aster-rank-rate { color: #13744f; font-variant-numeric: tabular-nums; font-weight: 600; }
+.aster-rank-coin-link { color: #1762af; font-weight: 600; }
+.aster-rank-coin-link:hover { text-decoration: underline; }
+.aster-rank-volume { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.aster-rank-chains { display: grid; gap: 4px; }
+.aster-rank-chain { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.aster-rank-chain .astro-chain-label { min-width: 132px; }
+.aster-rank-address { max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.aster-rank-mobile { display: none; }
+
+@media (max-width: 640px) {
+  .aster-rank-page { padding: 16px 12px 28px; }
+  .aster-rank-header { gap: 12px; }
+  .aster-rank-desktop { display: none; }
+  .aster-rank-mobile { display: block; }
+  .aster-rank-mobile-row { padding: 13px 0; border-top: 1px solid #e5ebe8; }
+  .aster-rank-mobile-head { display: flex; align-items: center; gap: 3px; min-width: 0; }
+  .aster-rank-mobile-head .aster-rank-rate { margin-left: auto; white-space: nowrap; }
+  .aster-rank-mobile-rank { width: 24px; flex: 0 0 24px; color: #718078; font-variant-numeric: tabular-nums; }
+  .aster-rank-mobile-stats { display: flex; gap: 3px 12px; flex-wrap: wrap; margin: 1px 0 8px 27px; color: #718078; font-size: 12px; }
+  .aster-rank-mobile .aster-rank-chains { margin-left: 27px; gap: 7px; }
+  .aster-rank-mobile .aster-rank-chain { display: grid; grid-template-columns: minmax(0, 1fr) 32px; gap: 2px 4px; }
+  .aster-rank-mobile .aster-rank-chain .astro-chain-label { grid-column: 1 / -1; min-width: 0; }
+  .aster-rank-mobile .aster-rank-address { max-width: none; min-width: 0; }
+}

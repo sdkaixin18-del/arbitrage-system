@@ -56,6 +56,54 @@ def test_queue_status_failure_does_not_break_card_status(monkeypatch):
     assert q.status()['state']=='read_failed'
 
 
+def test_lookup_failure_keeps_job_and_existing_note_without_thread(monkeypatch):
+    from app import astro_sdk as sdk, astro_transfer_labels as labels
+    monkeypatch.setattr(sdk, 'astro_chain_label_publish_enabled', lambda: True)
+    monkeypatch.setattr(labels, 'collect', lambda *a: (_ for _ in ()).throw(RuntimeError('mapping unavailable')))
+    monkeypatch.setattr(labels, 'routes', lambda *a: (_ for _ in ()).throw(RuntimeError('mapping unavailable')))
+    monkeypatch.setattr(sdk.threading, 'Thread', lambda *a, **kw: pytest.fail('must use existing queue'))
+    p = pair(); card = {**p, 'id': 'one'}
+    sdk._queue_astro_chain_label_publish(p, card)
+    now = q._load()['one']['nextAt']
+    published = []
+    q.deliver_one([card], lambda p, c: published.append(p['_chainNote']) or True, now=now)
+    assert published == ['上架']
+    assert q._load()['one']['state'] == 'pending_lookup'
+    q.deliver_one([card], lambda *a: pytest.fail('must not repeat same note'), now=now+31)
+    monkeypatch.setattr(labels, 'routes', lambda p: [('gate', 'ABC')])
+    monkeypatch.setattr(labels, 'collect', lambda p: ('Gate提关', [{'status': 'ok'}]))
+    q.deliver_one([card], lambda p, c: published.append(p['_chainNote']) or True, now=now+152)
+    assert published == ['上架', '上架；Gate提关']
+    assert q._load()['one']['state'] == 'published_to_server'
+
+
+def test_partial_result_publishes_and_keeps_missing_leg_retry(monkeypatch):
+    from app import astro_transfer_labels as labels
+    monkeypatch.setattr(labels, 'routes', lambda p: [('gate', 'ABC'), ('bitget', 'ABC')])
+    monkeypatch.setattr(labels, 'collect', lambda p: ('Gate提关', [{'status': 'ok'}, {'status': 'unknown'}]))
+    p = pair(); card = {**p, 'id': 'one'}
+    q.enqueue_lookup(p, card)
+    now = q._load()['one']['nextAt']
+    published = []
+    q.deliver_one([card], lambda p, c: published.append(p['_chainNote']) or True, now=now)
+    assert q._load()['one']['state'] == 'pending_lookup'
+    monkeypatch.setattr(labels, 'collect', lambda p: ('Gate提关；Bitget提关', [{'status': 'ok'}, {'status': 'ok'}]))
+    q.deliver_one([card], lambda p, c: published.append(p['_chainNote']) or True, now=now+31)
+    assert published == ['上架；Gate提关', '上架；Gate提关；Bitget提关']
+    assert q._load()['one']['state'] == 'published_to_server'
+
+
+def test_worker_storage_error_is_logged_and_does_not_escape(monkeypatch):
+    from app import astro_sdk as sdk
+    events = []
+    q._path().write_text('{')
+    monkeypatch.setattr(sdk, '_log', lambda event, **kw: events.append(event))
+    q.deliver_one([], lambda *a: pytest.fail('no publish'))
+    assert events == ['astro_label_delivery_failed']
+    assert not q._worker.locked()
+    assert q._path().read_text() == '{'
+
+
 def test_healthy_source_continues_during_other_source_backoff(monkeypatch):
     from app import astro_spread_scanner as scanner
     now=[100.];monkeypatch.setattr(h,'time',SimpleNamespace(monotonic=lambda:now[0]))

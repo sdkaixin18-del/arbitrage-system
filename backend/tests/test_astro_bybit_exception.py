@@ -64,7 +64,7 @@ def test_setting_roundtrip_and_unrelated_save_preserves_exception(isolated):
     with pytest.raises(ValueError):scanner.update_astro_spread_subscriptions(['gateFuture'],ff_bybit_sell_exception_enabled='yes')
 
 
-@pytest.mark.parametrize('change',['threshold','switch'])
+@pytest.mark.parametrize('change',['threshold','switch','saved_threshold'])
 def test_submit_rechecks_threshold_and_live_switch(monkeypatch,isolated,change):
     from test_astro_sdk import fresh_quote_report
     monkeypatch.setattr(sdk,'_refresh_pending_submission_routes',lambda:None)
@@ -76,5 +76,34 @@ def test_submit_rechecks_threshold_and_live_switch(monkeypatch,isolated,change):
     pair={'name':'ABC','type':'FF','buyEx':'gate','sellEx':'bybit','openPosition':'0.15','status':False,'disableOpen':False}
     def validate(p,c):
         if change=='switch':isolated.write_text(json.dumps({'ffBybitSellExceptionEnabled':False}))
+        if change=='saved_threshold':isolated.write_text(json.dumps({'ffBybitSellExceptionEnabled':True,'ffBybitSellExceptionMinOpenSpreadPct':16}))
         return {**p,'openPosition':'0.1' if change=='threshold' else '0.15'},fresh_quote_report()
     assert not sdk._sync_candidate_pair(Client(),pair,sdk_config(),validate,set())
+
+
+@pytest.mark.parametrize('threshold,gap,allowed', [(6,6,False),(6,6.01,True),(15,12,False),(15,15.01,True)])
+def test_editable_exception_threshold(isolated, threshold, gap, allowed):
+    isolated.write_text(json.dumps({'ffBybitSellExceptionEnabled':True,'ffBybitSellExceptionMinOpenSpreadPct':threshold}))
+    candidate={'type':'FF','symbol':'ABC','buyExchange':'gate','sellExchange':'bybit','openSpreadPct':gap}
+    assert bool(sdk.astro_spread_card_routes(candidate)) is allowed
+    assert scanner._meets_auto_card_rule(candidate) is allowed
+
+
+def test_editable_settings_roundtrip_and_cadence_preserves_hot_routes(monkeypatch):
+    scanner.update_astro_spread_subscriptions(['gateFuture','bybitFuture'], scan_interval_seconds=8, ff_bybit_sell_exception_min_open_spread_pct=12)
+    monkeypatch.setattr(scanner, '_hot_routes', {'test': {'symbol':'ABC'}})
+    scanner.update_astro_spread_subscriptions(['gateFuture','bybitFuture'], scan_interval_seconds=9)
+    assert scanner.spread_scan_interval_seconds() == 9
+    assert sdk.astro_ff_bybit_sell_exception_min_open_pct() == 12
+    assert 'test' in scanner._hot_routes
+    scanner.update_astro_spread_subscriptions(['gateFuture','bybitFuture'], ff_bybit_sell_exception_min_open_spread_pct=13)
+    assert scanner._hot_routes == {}
+
+
+@pytest.mark.parametrize('field,values', [('scan_interval_seconds',[True,4,61,5.5,'bad',float('nan')]),('ff_bybit_sell_exception_min_open_spread_pct',[True,0,101,'bad',float('nan')])])
+def test_invalid_editable_settings_do_not_write(isolated,field,values):
+    before=isolated.read_bytes()
+    for value in values:
+        with pytest.raises(ValueError):
+            scanner.update_astro_spread_subscriptions(['gateFuture','bybitFuture'],**{field:value})
+        assert isolated.read_bytes()==before

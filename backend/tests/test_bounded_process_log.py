@@ -11,7 +11,11 @@ def test_child_output_drained_and_rotation_bounded(tmp_path):
     assert p.wait(timeout=10)==0
     deadline=time.monotonic()+5
     while time.monotonic()<deadline:
-        if 'LAST' in (tmp_path/'child.log').read_text():break
+        try:
+            if 'LAST' in (tmp_path/'child.log').read_text():break
+        except FileNotFoundError:
+            # Rotation briefly renames the active file while the drain runs.
+            pass
         time.sleep(.02)
     assert 'LAST' in (tmp_path/'child.log').read_text()
     assert len(list(tmp_path.glob('child.log*')))==3

@@ -1,4 +1,37 @@
 import { request } from "../apiClient";
+
+export interface AsterFundingRankAddress {
+  chainId: string;
+  address: string;
+  source: string;
+}
+
+export interface AsterFundingRankRow {
+  symbol: string;
+  coin: string;
+  totalRatePct: number;
+  volume24hUsdt: number;
+  settlementCount: number;
+  latestSettlementAt: string;
+  listedWithin24h: boolean;
+  addresses: AsterFundingRankAddress[];
+}
+
+export interface AsterFundingRankResponse {
+  status: "ready" | "pending" | "delayed";
+  scope: string;
+  limit: number;
+  asOf: string | null;
+  generatedAt: string | null;
+  currentCutoff: string;
+  nextCutoff: string;
+  running: boolean;
+  lastError: string | null;
+  marketCount: number | null;
+  eligibleCount: number | null;
+  rankedCount: number;
+  rows: AsterFundingRankRow[];
+}
 import type {
   CryptoExchange,
   CryptoFsBorrowSearchResponse,
@@ -19,6 +52,8 @@ import type {
 } from "../api";
 
 export const cryptoApi = {
+  asterFundingRank: (limit: 10 | 20 | 50) =>
+    request<AsterFundingRankResponse>(`/api/astro/aster-funding-rank?limit=${limit}`),
   fsBorrowSearch: (symbol: string, refresh = false) =>
     request<CryptoFsBorrowSearchResponse>(
       `/api/fs/borrow-search?symbol=${encodeURIComponent(symbol)}${refresh ? "&refresh=true" : ""}`
@@ -103,10 +138,10 @@ export const cryptoApi = {
       "/api/fs/astro-auto-card/submissions/recheck",
       {method:"POST",body:JSON.stringify({submissionId})}
     ),
-  resolveAstroSubmissionNotExecuted: (payload: {submissionId: string; evidence: string}) =>
+  resolveAstroSubmissionNotExecuted: (payload: {submissionId: string; evidence: string; reviewedRoute: string; confirmNotExecuted: boolean}) =>
     request<{result: {submissionId: string; state: string}; pendingSubmissions: NonNullable<NonNullable<CryptoFsSignalsResponse["astroAutoCard"]>["pendingSubmissions"]>}>(
       "/api/fs/astro-auto-card/submissions/resolve",
-      {method:"POST",body:JSON.stringify({...payload,confirmNotExecuted:true})}
+      {method:"POST",body:JSON.stringify(payload)}
     ),
   confirmAstroDexMapping: (payload: {exchange: string; symbol: string; chainIndex: string; contractAddress: string}) =>
     request<NonNullable<CryptoFsSignalsResponse["astroAutoCard"]>>("/api/fs/astro-auto-card/dex-mappings/confirm", {method:"POST",body:JSON.stringify(payload)}),
@@ -125,6 +160,8 @@ export const cryptoApi = {
     deletePullbackPctPoints?: number;
     ffMinOpenSpreadPct?: number;
     ffBybitSellExceptionEnabled?: boolean;
+    ffBybitSellExceptionMinOpenSpreadPct?: number;
+    scanIntervalSeconds?: number;
     sfMinOpenSpreadPct?: number;
     sfOkxdexMinOpenSpreadPct?: number;
     sfPancakeswapV3MinOpenSpreadPct?: number;

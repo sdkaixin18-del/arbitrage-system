@@ -4,7 +4,7 @@ import time
 from concurrent.futures import Future
 from pathlib import Path
 import pytest
-from app import astro_transfer_labels as mod, astro_sdk as sdk
+from app import astro_transfer_labels as mod, astro_sdk as sdk, astro_label_queue as queue
 
 
 @pytest.fixture(autouse=True)
@@ -68,17 +68,41 @@ def test_cache_expiry_and_exact_spot_alias(monkeypatch):
     assert mod.routes({**pair,'buyEx':'pancakeswapv3'})==[]
 
 
-def test_publication_combines_existing_note_and_transfer_remark(monkeypatch):
+def test_publication_combines_existing_note_and_transfer_remark(monkeypatch, tmp_path):
     captured=[]
+    monkeypatch.setattr(queue, '_path', lambda: tmp_path / 'labels.json')
     monkeypatch.setattr(sdk,'astro_chain_label_publish_enabled',lambda:True)
-    monkeypatch.setattr(mod,'collect',lambda p:('Gate单机币',[]))
+    monkeypatch.setattr(mod,'collect',lambda p:('Gate单机币',[{'status': 'ok'}]))
     monkeypatch.setattr(sdk,'_log',lambda *a,**k:None)
-    monkeypatch.setattr(sdk.astro_label_queue,'enqueue',lambda p,c:captured.append(p['_chainNote']))
-    class Immediate:
-        def __init__(self,target,**kw):self.target=target
-        def start(self):self.target()
-    monkeypatch.setattr(sdk.threading,'Thread',Immediate)
-    sdk._queue_astro_chain_label_publish({'name':'NES','_chainNote':'上架'},{'id':'test'})
+    pair = {'name': 'NES', 'type': 'FF', 'buyEx': 'gate', 'sellEx': 'aster', '_chainNote': '上架'}
+    card = {**pair, 'id': 'test'}
+    sdk._queue_astro_chain_label_publish(pair, card)
+    queue.deliver_one([card], lambda p,c: captured.append(p['_chainNote']) or True, now=time.time()+11)
     assert captured==['上架；Gate单机币']
     sdk._queue_astro_chain_label_publish({'name':'NES','buyEx':'pancakeswapv3'},{'id':'test2'})
     assert len(captured)==1
+
+
+def test_unknown_transfer_result_is_retried_after_card_readback(monkeypatch, tmp_path):
+    monkeypatch.setattr(queue, '_path', lambda: tmp_path / 'labels.json')
+    monkeypatch.setattr(sdk, 'astro_chain_label_publish_enabled', lambda: True)
+    monkeypatch.setattr(mod, 'collect', lambda p: ('', [{'status': 'unknown'}]))
+    monkeypatch.setattr(sdk, '_log', lambda *a, **k: None)
+    class Immediate:
+        def __init__(self, target, **kw): self.target = target
+        def start(self): self.target()
+    monkeypatch.setattr(sdk.threading, 'Thread', Immediate)
+    pair = {'name': 'TMX', 'type': 'SF', 'buyEx': 'bitget', 'sellEx': 'bybit'}
+    card = {**pair, 'id': 'current-card'}
+    sdk._queue_astro_chain_label_publish(pair, card)
+    assert queue._load()['current-card']['state'] == 'pending_lookup'
+    published = []
+    queue.deliver_one([card], lambda p, c: published.append((p['_chainNote'], c['id'])) or True,
+                      now=time.time() + 11)
+    assert published == []
+    assert queue._load()['current-card']['state'] == 'pending_lookup'
+    monkeypatch.setattr(mod, 'collect', lambda p: ('Bitget提关', [{'status': 'ok'}]))
+    queue.deliver_one([card], lambda p, c: published.append((p['_chainNote'], c['id'])) or True,
+                      now=time.time() + 50)
+    assert published == [('Bitget提关', 'current-card')]
+    assert queue._load()['current-card']['state'] == 'published_to_server'

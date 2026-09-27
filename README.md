@@ -63,3 +63,20 @@ Run Gitleaks against both the working tree and complete Git history before push.
 Also inspect personal addresses, user paths, cloud account/resource identifiers,
 test fixtures, binaries and commit author metadata. A clean scan is not an
 absolute guarantee that no sensitive information exists.
+
+## 2026-09-27 source update
+
+This update includes Astro scan-rule draft handling, funding-rank UI,
+submission review safeguards, inactive-alert compatibility, pooled SDK/funding
+connections, bounded announcement fetching, Pulse timeout handling and runtime
+environment installation support. Experimental depth-transport tools remain
+opt-in reference code; this upload does not deploy or enable them.
+
+Validation of the sanitized checkout: 1,118 backend tests and 26 launcher tests
+passed; the frontend TypeScript check and production build passed. The frontend
+build retains a large-chunk warning. Go transport tests were not rerun for this
+upload because Go was unavailable in the validation environment.
+
+These checks verify the source snapshot, not trading outcomes or continuous
+production reliability. A full post-fix 24-hour operational comparison remains
+pending.

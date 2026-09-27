@@ -59,6 +59,35 @@ def test_disabled_alert_reports_inactive_unreadable_direction(monkeypatch, tmp_p
     assert coverage["completeReadbackSnapshots"] == 0
 
 
+def test_cleanup_protection_lists_only_recent_observed_cards(monkeypatch, tmp_path):
+    monkeypatch.setenv("ASTRO_AUTO_CARD_REGISTRY_FILE", str(tmp_path / "registry.json"))
+    now = datetime(2026, 9, 26, tzinfo=timezone.utc)
+    monkeypatch.setattr(registry_module, "_utc_now", lambda: now)
+    card = {**pair(), "id": "protected"}
+    register_auto_created_pair({**pair(), "priceAlertOnlyRise": False}, astro_pair=card)
+    assert astro_cleanup_status()["recentProtectedCards"] == []
+    registry_module.record_cleanup_protection({**card, "id": "replacement"}, "submitted_config_not_readable:priceAlertOnlyRise")
+    assert astro_cleanup_status()["recentProtectedCards"] == []
+    registry_module.record_cleanup_protection(card, "card_not_paused")
+    assert astro_cleanup_status()["recentProtectedCards"] == []
+    registry_module.record_cleanup_protection(card, "submitted_config_not_readable:priceAlertOnlyRise")
+    assert astro_cleanup_status()["recentProtectedCards"][0]["cardId"] == "protected"
+    now += timedelta(seconds=601)
+    assert astro_cleanup_status()["recentProtectedCards"] == []
+
+
+@pytest.mark.parametrize("change", ["missing", "replacement", "eligible", "unknown"])
+def test_cleanup_protection_clears_after_new_observation(monkeypatch, tmp_path, change):
+    monkeypatch.setenv("ASTRO_AUTO_CARD_REGISTRY_FILE", str(tmp_path / "registry.json"))
+    card = {**pair(), "id": "protected"}
+    register_auto_created_pair(pair(), astro_pair=card)
+    registry_module.record_cleanup_protection(card, "submitted_config_not_readable:priceAlertOnlyRise")
+    existing = [] if change == "missing" else [{**card, "id": "replacement" if change == "replacement" else "protected"}]
+    observations = {registry_module.pair_identity(card): {"state": "invalid" if change in ("missing", "replacement") else change}}
+    observe_auto_card_cleanup(observations, existing)
+    assert astro_cleanup_status()["recentProtectedCards"] == []
+
+
 @pytest.mark.parametrize("malformed", ["{bad", "[]", '{"routes": []}', '{"pendingSubmissions": {"bad": {}}}'])
 def test_malformed_registry_never_overwrites_pending_storage(monkeypatch, tmp_path, malformed) -> None:
     path = tmp_path / "registry.json"

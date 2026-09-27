@@ -13,6 +13,8 @@ def isolated(monkeypatch, tmp_path):
     monkeypatch.setattr(news, "_completed_listing_events", set())
     monkeypatch.setenv('ASTRO_AUTO_CARD_REGISTRY_FILE',str(tmp_path/'registry.json'))
     monkeypatch.setenv('ASTRO_SPREAD_SUBSCRIPTIONS_FILE',str(tmp_path/'subscriptions.json'))
+    (tmp_path/'subscriptions.json').write_text('{}')
+    monkeypatch.setenv('ASTRO_CHAIN_LABEL_PUBLISH_ENABLED', '0')
     for name,value in [('_blocks',{}),('_listings',{}),('_trading_markets',{}),('_state',{}),('_path',tmp_path/'news.json'),('_startup_pending',False),('_storage_loaded',True)]:
         monkeypatch.setattr(news,name,value)
     monkeypatch.setattr(scanner,'spread_scan_market_keys',lambda: {'binanceSpot','binanceFuture','gateSpot','gateFuture','bitgetFuture'})
